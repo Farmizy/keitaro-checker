@@ -13,7 +13,7 @@ def _encrypt_fields(data: dict[str, Any]) -> dict[str, Any]:
     """Encrypt sensitive fields before writing to DB."""
     result = dict(data)
     for field in ENCRYPTED_FIELDS:
-        if field in result and result[field] is not None:
+        if field in result and result[field]:
             result[field] = encrypt(result[field])
     return result
 
@@ -22,7 +22,7 @@ def _decrypt_fields(data: dict[str, Any]) -> dict[str, Any]:
     """Decrypt sensitive fields after reading from DB."""
     result = dict(data)
     for field in ENCRYPTED_FIELDS:
-        if field in result and result[field] is not None:
+        if field in result and result[field]:
             result[field] = decrypt(result[field])
     return result
 
