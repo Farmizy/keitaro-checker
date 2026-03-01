@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str
     supabase_key: str
-    supabase_jwt_secret: str
+    supabase_jwt_secret: str = ""
 
     # Keitaro (Internal Panel API)
     keitaro_url: str  # e.g. https://pro1.trk.dev
