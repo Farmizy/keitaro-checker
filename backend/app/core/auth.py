@@ -1,6 +1,7 @@
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from loguru import logger
 
 from app.config import settings
 
@@ -20,11 +21,13 @@ def get_current_user(
         )
         return payload
     except jwt.ExpiredSignatureError:
+        logger.warning("JWT expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired",
         )
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        logger.error("JWT verification failed: {} | secret_len={}", e, len(settings.supabase_jwt_secret))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
