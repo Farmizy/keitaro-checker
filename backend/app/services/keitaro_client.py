@@ -38,15 +38,42 @@ class KeitaroClient:
         )
         resp.raise_for_status()
 
+        # Try multiple ways to extract the session cookie
         session_cookie = resp.cookies.get("keitaro")
+
         if not session_cookie:
-            # Some Keitaro versions return cookie in Set-Cookie header
             for cookie in resp.cookies.jar:
                 if cookie.name == "keitaro":
                     session_cookie = cookie.value
                     break
 
+        # Check Set-Cookie header directly
         if not session_cookie:
+            set_cookie = resp.headers.get("set-cookie", "")
+            if "keitaro=" in set_cookie:
+                for part in set_cookie.split(";"):
+                    part = part.strip()
+                    if part.startswith("keitaro="):
+                        session_cookie = part.split("=", 1)[1]
+                        break
+
+        # Check response body — some Keitaro versions return token in JSON
+        if not session_cookie:
+            try:
+                body = resp.json()
+                session_cookie = body.get("token") or body.get("session")
+                if session_cookie:
+                    logger.info("Keitaro: got session from response body")
+            except Exception:
+                pass
+
+        if not session_cookie:
+            logger.error(
+                "Keitaro: no session cookie. "
+                f"status={resp.status_code} "
+                f"set-cookie={resp.headers.get('set-cookie', 'NONE')} "
+                f"body={resp.text[:300]}"
+            )
             raise RuntimeError("Keitaro login failed: no session cookie returned")
 
         self._session_cookie = session_cookie
