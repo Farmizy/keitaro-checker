@@ -154,6 +154,8 @@ class PanelClient:
                 "limit": limit,
             },
         )
+        if resp.status_code != 200:
+            logger.error(f"Panel API /accounts error: status={resp.status_code} body={resp.text[:500]}")
         resp.raise_for_status()
         data = resp.json()
 
