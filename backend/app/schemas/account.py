@@ -11,14 +11,14 @@ class AccountCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     account_id: str = Field(..., min_length=1, description="Facebook account ID (act_XXXXX)")
     panel_account_id: Optional[int] = None
-    access_token: str = Field(..., min_length=1)
-    cookie: str = Field(..., min_length=1)
-    useragent: str = Field(..., min_length=1)
-    proxy_type: ProxyType
-    proxy_host: str = Field(..., min_length=1)
-    proxy_port: int = Field(..., ge=1, le=65535)
-    proxy_login: str = Field(..., min_length=1)
-    proxy_password: str = Field(..., min_length=1)
+    access_token: str = ""
+    cookie: str = ""
+    useragent: str = ""
+    proxy_type: ProxyType = ProxyType.SOCKS5
+    proxy_host: str = ""
+    proxy_port: int = 0
+    proxy_login: str = ""
+    proxy_password: str = ""
 
 
 class AccountUpdate(BaseModel):
@@ -30,7 +30,7 @@ class AccountUpdate(BaseModel):
     useragent: Optional[str] = None
     proxy_type: Optional[ProxyType] = None
     proxy_host: Optional[str] = None
-    proxy_port: Optional[int] = Field(None, ge=1, le=65535)
+    proxy_port: Optional[int] = None
     proxy_login: Optional[str] = None
     proxy_password: Optional[str] = None
     is_active: Optional[bool] = None
@@ -41,13 +41,6 @@ class AccountResponse(BaseModel):
     name: str
     account_id: str
     panel_account_id: Optional[int] = None
-    useragent: str
-    proxy_type: ProxyType
-    proxy_host: str
-    proxy_port: int
-    proxy_login: str
-    # access_token, cookie, proxy_password — never returned
-    hide_comments: bool
     is_active: bool
     last_check_at: Optional[datetime] = None
     last_error: Optional[str] = None

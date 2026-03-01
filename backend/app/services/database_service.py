@@ -83,6 +83,25 @@ class DatabaseService:
         )
         return [_decrypt_fields(row) for row in response.data]
 
+    def upsert_account_by_panel_id(self, panel_id: int, data: dict[str, Any]) -> dict:
+        """Upsert account by panel_account_id."""
+        existing = (
+            self.client.table("fb_accounts")
+            .select("*")
+            .eq("panel_account_id", panel_id)
+            .execute()
+        )
+        if existing.data:
+            response = (
+                self.client.table("fb_accounts")
+                .update(data)
+                .eq("panel_account_id", panel_id)
+                .execute()
+            )
+            return response.data[0]
+        response = self.client.table("fb_accounts").insert(data).execute()
+        return response.data[0]
+
     # --- campaigns ---
 
     def get_campaigns(

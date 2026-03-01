@@ -1,10 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from loguru import logger
 
 from app.core.auth import get_current_user
 from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse
 from app.services.database_service import DatabaseService
+from app.services.panel_client import PanelClient
 
 router = APIRouter()
 
@@ -20,6 +22,38 @@ async def list_accounts(
 ):
     accounts = db.get_accounts()
     return accounts
+
+
+@router.post("/sync")
+async def sync_accounts(
+    request: Request,
+    _user: dict = Depends(get_current_user),
+    db: DatabaseService = Depends(get_db),
+):
+    """Sync accounts from 2KK Panel API into local DB."""
+    panel: PanelClient = request.app.state.panel
+    from datetime import datetime
+    import zoneinfo
+
+    now = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
+    today = now.strftime("%Y-%m-%d")
+
+    panel_accounts = await panel.get_accounts(
+        start_date=today, end_date=today,
+    )
+
+    synced = 0
+    for pa in panel_accounts:
+        db.upsert_account_by_panel_id(pa.internal_id, {
+            "name": pa.name,
+            "account_id": f"panel_{pa.internal_id}",
+            "panel_account_id": pa.internal_id,
+            "is_active": True,
+        })
+        synced += 1
+
+    logger.info(f"Synced {synced} accounts from Panel API")
+    return {"synced": synced, "total": len(panel_accounts)}
 
 
 @router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)

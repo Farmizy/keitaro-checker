@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
         interval_minutes=settings.check_interval_minutes,
     )
 
+    app.state.panel = panel
     app.state.scheduler = sched
     sched.start()
 

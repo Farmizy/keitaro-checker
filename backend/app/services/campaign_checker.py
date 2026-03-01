@@ -53,7 +53,15 @@ class CampaignChecker:
             now = datetime.now(MOSCOW_TZ)
             today = now.strftime("%Y-%m-%d")
 
-            # 1. Fetch campaigns from Panel API (with spend)
+            # 1. Sync accounts from Panel if DB is empty
+            db_accounts = self.db.get_active_accounts()
+            if not db_accounts:
+                logger.info("No accounts in DB, syncing from Panel...")
+                await self._sync_accounts_from_panel(today)
+                db_accounts = self.db.get_active_accounts()
+                logger.info(f"Synced {len(db_accounts)} accounts")
+
+            # 2. Fetch campaigns from Panel API (with spend)
             logger.info("Fetching campaigns from Panel API...")
             panel_campaigns = await self.panel.get_all_campaigns(
                 start_date=today,
@@ -62,7 +70,7 @@ class CampaignChecker:
             )
             logger.info(f"Got {len(panel_campaigns)} campaigns from Panel")
 
-            # 2. Fetch conversions from Keitaro
+            # 3. Fetch conversions from Keitaro
             logger.info("Fetching conversions from Keitaro...")
             try:
                 await self.keitaro.authenticate()
@@ -72,8 +80,7 @@ class CampaignChecker:
                 logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
                 keitaro_conversions = {}
 
-            # 3. Build account name → DB account mapping
-            db_accounts = self.db.get_active_accounts()
+            # 4. Build account name → DB account mapping
             account_map = {acc["name"]: acc for acc in db_accounts}
 
             # 4. Process each campaign
@@ -186,6 +193,19 @@ class CampaignChecker:
                 logger.error(f"Telegram notification failed: {e}")
 
         return "action" if success else "checked"
+
+    async def _sync_accounts_from_panel(self, today: str):
+        """Pull accounts from Panel API and upsert into DB."""
+        panel_accounts = await self.panel.get_accounts(
+            start_date=today, end_date=today,
+        )
+        for pa in panel_accounts:
+            self.db.upsert_account_by_panel_id(pa.internal_id, {
+                "name": pa.name,
+                "account_id": f"panel_{pa.internal_id}",
+                "panel_account_id": pa.internal_id,
+                "is_active": True,
+            })
 
     def _sync_campaign(self, pc: PanelCampaign, fb_account_id: str) -> dict:
         """Sync Panel campaign data to DB, preserving 'stopped' status."""
