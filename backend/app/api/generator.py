@@ -180,7 +180,6 @@ async def generate_campaigns(
                 await keitaro.create_stream(
                     campaign_id=keitaro_id,
                     offer_ids=[entry.offer_id],
-                    countries=[entry.geo],
                 )
                 logger.info(f"Created ОСНОВНОЙ stream for campaign #{keitaro_id}")
             except Exception as exc:

@@ -44,9 +44,10 @@ async def sync_accounts(
 
     synced = 0
     for pa in panel_accounts:
+        account_id = pa.fb_account_id or f"panel_{pa.internal_id}"
         db.upsert_account_by_panel_id(pa.internal_id, {
             "name": pa.name,
-            "account_id": f"panel_{pa.internal_id}",
+            "account_id": account_id,
             "panel_account_id": pa.internal_id,
             "is_active": True,
         })

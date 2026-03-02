@@ -35,6 +35,7 @@ class PanelAccount:
     internal_id: int
     name: str
     status: str
+    fb_account_id: str = ""
 
 
 @dataclass
@@ -169,13 +170,19 @@ class PanelClient:
         if not data.get("success"):
             raise RuntimeError(f"Panel API error: {data}")
 
+        items = data.get("data", [])
+        if items:
+            logger.debug(f"Panel API account keys: {list(items[0].keys())}")
+            logger.debug(f"Panel API first account: {{{k}: {v} for k, v in items[0].items() if k in ('id', 'name', 'accountId', 'fbAccountId', 'account_id', 'externalId', 'cab')}}")
+
         return [
             PanelAccount(
                 internal_id=item["id"],
                 name=item.get("name", ""),
                 status=item.get("status", "UNKNOWN"),
+                fb_account_id=str(item.get("accountId", "")),
             )
-            for item in data.get("data", [])
+            for item in items
         ]
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))

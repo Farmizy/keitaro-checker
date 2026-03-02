@@ -235,6 +235,16 @@ class KeitaroClient:
         "sub_id_30": {"name": "box", "placeholder": "", "alias": ""},
     }
 
+    async def _resolve_campaign_group_id(self) -> int:
+        """Resolve campaign group ID by login name."""
+        groups = await self._request(
+            "groups.listAsOptions", method="GET", extra_params={"type": "campaigns"},
+        )
+        for g in groups:
+            if g["name"] == self._login:
+                return g["value"]
+        return 0
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def create_campaign(self, name: str, domain: str, **kwargs: Any) -> dict:
         """Create a campaign in Keitaro. Returns dict with 'id' and 'alias'."""
@@ -250,6 +260,9 @@ class KeitaroClient:
         if buyer_name:
             params["sub_id_7"] = {"name": "buyer_name", "placeholder": buyer_name, "alias": ""}
 
+        # Auto-detect campaign group
+        group_id = kwargs.get("group_id") or await self._resolve_campaign_group_id()
+
         body = {
             "name": name,
             "alias": alias,
@@ -259,8 +272,9 @@ class KeitaroClient:
             "cost_auto": True,
             "type": "weight",
             "uniqueness_method": "ip_ua",
+            "bind_visitors": "slo",
             "domain_id": domain_id,
-            "group_id": kwargs.get("group_id", 0),
+            "group_id": group_id,
             "traffic_source_id": kwargs.get("traffic_source_id", 1),
             "parameters": params,
         }
@@ -271,7 +285,6 @@ class KeitaroClient:
         self,
         campaign_id: int,
         offer_ids: list[int],
-        countries: list[str],
         name: str = "ОСНОВНОЙ",
     ) -> dict:
         """Create main stream (ОСНОВНОЙ) with offer for a campaign."""
@@ -287,7 +300,7 @@ class KeitaroClient:
             "filter_or": False,
             "collect_clicks": True,
             "offer_selection": "after_click",
-            "filters": [{"name": "country", "mode": "accept", "payload": countries}],
+            "filters": [],
             "offers": [{"offer_id": oid} for oid in offer_ids],
         }
         return await self._request("streams.create", body)
