@@ -71,9 +71,6 @@ export default function GeneratorPage() {
   const createProfile = useCreateProfile()
   const updateProfile = useUpdateProfile()
   const generate = useGenerate()
-  const { data: pages, isLoading: pagesLoading } = usePages(
-    profileForm.fb_account_id || null,
-  )
 
   const [entries, setEntries] = useState<CampaignFormEntry[]>([emptyEntry()])
   const [profileDialogOpen, setProfileDialogOpen] = useState(false)
@@ -86,6 +83,10 @@ export default function GeneratorPage() {
     default_budget: 30,
     custom_audiences: "",
   })
+
+  const { data: pages, isLoading: pagesLoading } = usePages(
+    profileForm.fb_account_id || null,
+  )
 
   function addEntry() {
     setEntries((prev) => [...prev, emptyEntry()])
