@@ -23,14 +23,15 @@ class KeitaroClient:
         self.base_url = (base_url or settings.keitaro_url).rstrip("/")
         self._login = login or settings.keitaro_login
         self._password = password or settings.keitaro_password
-        self._session_cookie: str | None = None
         self._http = httpx.AsyncClient(timeout=30)
+        self._authenticated = False
 
     async def close(self):
         await self._http.aclose()
 
-    async def authenticate(self) -> str:
-        """Login and obtain session cookie."""
+    async def authenticate(self) -> None:
+        """Login and store session cookie in httpx cookie jar."""
+        # Use a fresh client for login to avoid cookie conflicts
         resp = await self._http.post(
             f"{self.base_url}/admin/",
             params={"object": "auth.login"},
@@ -38,69 +39,69 @@ class KeitaroClient:
         )
         resp.raise_for_status()
 
-        # Try multiple ways to extract the session cookie
-        session_cookie = resp.cookies.get("keitaro")
+        body = resp.json()
+        logger.debug(f"Keitaro auth response: status={resp.status_code} body_keys={list(body.keys()) if isinstance(body, dict) else 'not_dict'}")
+        logger.debug(f"Keitaro auth cookies: {dict(resp.cookies)}")
+        logger.debug(f"Keitaro auth Set-Cookie: {resp.headers.get('set-cookie', 'NONE')}")
 
-        if not session_cookie:
+        # Check if login was successful by response body
+        if isinstance(body, dict) and body.get("message", "").startswith("The attempts"):
+            raise RuntimeError(f"Keitaro login blocked: {body['message']}")
+
+        # Extract session cookie
+        session_id = resp.cookies.get("keitaro")
+
+        if not session_id:
             for cookie in resp.cookies.jar:
                 if cookie.name == "keitaro":
-                    session_cookie = cookie.value
+                    session_id = cookie.value
                     break
 
-        # Check Set-Cookie header directly
-        if not session_cookie:
-            set_cookie = resp.headers.get("set-cookie", "")
-            if "keitaro=" in set_cookie:
-                for part in set_cookie.split(";"):
-                    part = part.strip()
-                    if part.startswith("keitaro="):
-                        session_cookie = part.split("=", 1)[1]
+        # Parse from Set-Cookie header directly
+        if not session_id:
+            for header_val in resp.headers.get_list("set-cookie"):
+                if "keitaro=" in header_val:
+                    for part in header_val.split(";"):
+                        part = part.strip()
+                        if part.startswith("keitaro="):
+                            session_id = part.split("=", 1)[1]
+                            break
+                    if session_id:
                         break
 
-        # Check response body — some Keitaro versions return token in JSON
-        if not session_cookie:
-            try:
-                body = resp.json()
-                session_cookie = body.get("token") or body.get("session")
-                if session_cookie:
-                    logger.info("Keitaro: got session from response body")
-            except Exception:
-                pass
-
-        if not session_cookie:
+        if not session_id:
             logger.error(
-                "Keitaro: no session cookie. "
+                f"Keitaro: no session cookie. "
                 f"status={resp.status_code} "
-                f"set-cookie={resp.headers.get('set-cookie', 'NONE')} "
-                f"body={resp.text[:300]}"
+                f"headers={dict(resp.headers)} "
+                f"body={resp.text[:500]}"
             )
             raise RuntimeError("Keitaro login failed: no session cookie returned")
 
-        self._session_cookie = session_cookie
-        logger.info("Keitaro: authenticated successfully")
-        return session_cookie
-
-    def _cookies(self) -> dict[str, str]:
-        if not self._session_cookie:
-            raise RuntimeError("Not authenticated. Call authenticate() first.")
-        return {"keitaro": self._session_cookie}
+        # Set cookie on the httpx client for all future requests
+        self._http.cookies.set("keitaro", session_id, domain=httpx.URL(self.base_url).host)
+        self._authenticated = True
+        logger.info(f"Keitaro: authenticated successfully (session={session_id[:8]}...)")
 
     async def _request(self, object_action: str, data: dict | None = None, method: str = "POST") -> Any:
         """Make a request to Keitaro internal API with auto re-login on 401/403."""
+        if not self._authenticated:
+            raise RuntimeError("Not authenticated. Call authenticate() first.")
+
         kwargs: dict[str, Any] = {
             "params": {"object": object_action},
-            "cookies": self._cookies(),
         }
         if data is not None:
             kwargs["json"] = data
 
         resp = await self._http.request(method, f"{self.base_url}/admin/", **kwargs)
 
-        # Re-login on auth failure
+        logger.debug(f"Keitaro _request({object_action}): status={resp.status_code}")
+
+        # Re-login on auth failure (only once)
         if resp.status_code in (401, 403):
-            logger.warning("Keitaro: session expired, re-authenticating...")
+            logger.warning(f"Keitaro: got {resp.status_code} for {object_action}, re-authenticating...")
             await self.authenticate()
-            kwargs["cookies"] = self._cookies()
             resp = await self._http.request(method, f"{self.base_url}/admin/", **kwargs)
 
         resp.raise_for_status()
