@@ -13,6 +13,7 @@ class AccountProfileCreate(BaseModel):
     default_geo: str = ""
     default_budget: float = 30
     custom_audiences: str = ""
+    beneficiary: str = ""
     url_tags_template: str = (
         "campaign_id={keitaro_campaign_id}&ad_id={{ad.id}}"
         "&fbpx={pixel_id}&buyer_name={buyer_name}&account_id={{account.id}}"
@@ -26,6 +27,7 @@ class AccountProfileUpdate(BaseModel):
     default_geo: Optional[str] = None
     default_budget: Optional[float] = None
     custom_audiences: Optional[str] = None
+    beneficiary: Optional[str] = None
     url_tags_template: Optional[str] = None
 
 
@@ -38,6 +40,7 @@ class AccountProfileResponse(BaseModel):
     default_geo: str
     default_budget: float
     custom_audiences: str
+    beneficiary: str
     url_tags_template: str
     default_language: str
     additional_languages: list[str]

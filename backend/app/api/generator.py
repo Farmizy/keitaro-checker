@@ -216,6 +216,7 @@ async def generate_campaigns(
             landing_url=landing_url,
             custom_audiences=profile.get("custom_audiences", ""),
             url_tags=url_tags,
+            beneficiary=profile.get("beneficiary", ""),
         ))
 
         keitaro_results.append({

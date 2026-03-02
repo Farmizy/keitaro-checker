@@ -65,13 +65,14 @@ class TestGenerateFbExcel:
         link_col = headers.index("Link") + 1
         assert ws.cell(row=2, column=link_col).value == "https://test.com/ABC123"
 
-    def test_page_id_prefixed(self):
+    def test_campaign_page_id_empty(self):
+        """Campaign Page ID is empty — page set via Link Object ID."""
         specs = [_make_spec(page_id="12345")]
         wb = generate_fb_excel(specs)
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
         page_col = headers.index("Campaign Page ID") + 1
-        assert ws.cell(row=2, column=page_col).value == "o:12345"
+        assert ws.cell(row=2, column=page_col).value == ""
 
     def test_pixel_id_prefixed(self):
         specs = [_make_spec(pixel_id="99999")]
@@ -150,6 +151,30 @@ class TestGenerateFbExcel:
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
         ad_col = headers.index("Ad Name") + 1
-        assert ws.cell(row=2, column=ad_col).value == "Ad 1"
-        assert ws.cell(row=3, column=ad_col).value == "Ad 2"
-        assert ws.cell(row=4, column=ad_col).value == "Ad 3"
+        assert ws.cell(row=2, column=ad_col).value == "1"
+        assert ws.cell(row=3, column=ad_col).value == "2"
+        assert ws.cell(row=4, column=ad_col).value == "3"
+
+    def test_dynamic_creative_ad_format(self):
+        specs = [_make_spec(num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        col = headers.index("Dynamic Creative Ad Format") + 1
+        assert ws.cell(row=2, column=col).value == "Single Video"
+
+    def test_no_targeting_relaxation_column(self):
+        """Targeting Relaxation removed — was causing FB import errors."""
+        specs = [_make_spec(num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        assert "Targeting Relaxation" not in headers
+
+    def test_brand_safety_filtering(self):
+        specs = [_make_spec(num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        col = headers.index("Brand Safety Inventory Filtering Levels") + 1
+        assert ws.cell(row=2, column=col).value == "FACEBOOK_RELAXED, AN_RELAXED"

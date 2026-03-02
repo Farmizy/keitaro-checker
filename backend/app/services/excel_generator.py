@@ -29,17 +29,19 @@ ATTRIBUTION_SPEC = (
 # Ad set name suffixes for copies
 ADSET_SUFFIXES = ["", " - Copy", " - Copy 2", " - Copy 3", " - Copy 4"]
 
-# FB Ads Manager Bulk Upload columns
+# FB Ads Manager Bulk Upload columns (order matches real FB export)
 FB_COLUMNS = [
+    # Campaign level
     "Campaign Name",
     "Campaign Status",
     "Campaign Objective",
     "Buying Type",
     "Campaign Daily Budget",
     "Campaign Bid Strategy",
-    "Campaign Is Using L3 Schedule",
     "Campaign Start Time",
+    "Campaign Page ID",
     "New Objective",
+    # Ad Set level
     "Ad Set Run Status",
     "Ad Set Name",
     "Ad Set Time Start",
@@ -52,19 +54,25 @@ FB_COLUMNS = [
     "Location Types",
     "Age Min",
     "Age Max",
+    "Custom Audiences",
+    "Excluded Custom Audiences",
     "Advantage Audience",
+    "Individual Setting",
     "Age Range",
     "Targeting Optimization",
-    "Custom Audiences",
-    "Targeting Relaxation",
+    "Beneficiary",
+    "Payer",
+    "Brand Safety Inventory Filtering Levels",
     "Optimization Goal",
     "Attribution Spec",
     "Billing Event",
+    "Regional Regulated Categories",
+    # Ad level
     "Ad Status",
     "Ad Name",
+    "Dynamic Creative Ad Format",
     "Creative Type",
     "URL Tags",
-    "Campaign Page ID",
     "Instagram Account ID (New)",
     "Call to Action",
     "Default Language",
@@ -87,6 +95,7 @@ class CampaignSpec:
     landing_url: str
     custom_audiences: str
     url_tags: str
+    beneficiary: str = ""
     age_min: int = 25
     age_max: int = 65
     default_language: str = "Arabic"
@@ -131,14 +140,16 @@ def _build_row(
     languages: list[str],
 ) -> dict:
     row = {
+        # Campaign level
         "Campaign Name": spec.campaign_name,
         "Campaign Status": "PAUSED",
         "Campaign Objective": "Outcome Leads",
         "Buying Type": "AUCTION",
         "Campaign Daily Budget": spec.daily_budget,
         "Campaign Bid Strategy": "Highest volume or value",
-        "Campaign Is Using L3 Schedule": "Yes",
+        "Campaign Page ID": "",
         "New Objective": "Yes",
+        # Ad Set level
         "Ad Set Run Status": "ACTIVE",
         "Ad Set Name": f"New Leads Ad Set{adset_suffix}",
         "Destination Type": "UNDEFINED",
@@ -150,19 +161,25 @@ def _build_row(
         "Location Types": "home, recent",
         "Age Min": spec.age_min,
         "Age Max": spec.age_max,
+        "Custom Audiences": spec.custom_audiences,
+        "Excluded Custom Audiences": spec.custom_audiences,
         "Advantage Audience": 1,
+        "Individual Setting": "age: On, gender: On",
         "Age Range": f"{spec.age_min}, {spec.age_max}",
         "Targeting Optimization": "expansion_all",
-        "Custom Audiences": spec.custom_audiences,
-        "Targeting Relaxation": "FACEBOOK_RELAXED, AN_RELAXED",
+        "Beneficiary": spec.beneficiary,
+        "Payer": spec.beneficiary,
+        "Brand Safety Inventory Filtering Levels": "FACEBOOK_RELAXED, AN_RELAXED",
         "Optimization Goal": "OFFSITE_CONVERSIONS",
         "Attribution Spec": ATTRIBUTION_SPEC,
         "Billing Event": "IMPRESSIONS",
+        "Regional Regulated Categories": "VOLUNTARY_VERIFICATION",
+        # Ad level
         "Ad Status": "ACTIVE",
-        "Ad Name": f"Ad {ad_num}",
+        "Ad Name": str(ad_num),
+        "Dynamic Creative Ad Format": "Single Video",
         "Creative Type": "Link Page Post Ad",
         "URL Tags": spec.url_tags,
-        "Campaign Page ID": f"o:{spec.page_id}",
         "Instagram Account ID (New)": (
             f"x:{spec.instagram_id}" if spec.instagram_id else ""
         ),
