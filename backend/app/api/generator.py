@@ -156,6 +156,7 @@ async def generate_campaigns(
         # 2. Create campaign in Keitaro → get alias
         keitaro_campaign = await keitaro.create_campaign(
             name=keitaro_name, domain=entry.domain,
+            buyer_name=buyer_name,
         )
         keitaro_id = keitaro_campaign["id"]
         alias = keitaro_campaign.get("alias", "")

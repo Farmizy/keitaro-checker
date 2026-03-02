@@ -210,6 +210,31 @@ class KeitaroClient:
                 return d["id"]
         raise ValueError(f"Domain '{domain_name}' not found in Keitaro")
 
+    # Default sub_id parameter mappings (matches existing working campaigns)
+    DEFAULT_PARAMETERS = {
+        "keyword": {"name": "keyword", "placeholder": "", "alias": ""},
+        "cost": {"name": "cost", "placeholder": "", "alias": ""},
+        "currency": {"name": "currency", "placeholder": "", "alias": ""},
+        "external_id": {"name": "fbclid"},
+        "creative_id": {"name": "utm_creative", "placeholder": ""},
+        "ad_campaign_id": {"name": "utm_campaign", "placeholder": ""},
+        "source": {"name": "utm_source", "placeholder": ""},
+        "sub_id_1": {"name": "utm_placement", "placeholder": ""},
+        "sub_id_2": {"name": "campaign_id", "placeholder": "{{campaign_id}}"},
+        "sub_id_3": {"name": "adset_id", "placeholder": ""},
+        "sub_id_4": {"name": "ad_id", "placeholder": "{{ad.id}}"},
+        "sub_id_5": {"name": "adset_name", "placeholder": ""},
+        "sub_id_6": {"name": "fbpx", "placeholder": "{{fbpx}}", "alias": ""},
+        "sub_id_7": {"name": "buyer_name", "placeholder": "", "alias": ""},
+        "sub_id_8": {"name": "account_id", "placeholder": "{{account}}", "alias": ""},
+        "sub_id_11": {"name": "myTitle", "placeholder": "", "alias": ""},
+        "sub_id_12": {"name": "authorName", "placeholder": "", "alias": ""},
+        "sub_id_13": {"name": "imgUrl1", "placeholder": "", "alias": ""},
+        "sub_id_14": {"name": "imgUrl2", "placeholder": "", "alias": ""},
+        "sub_id_15": {"name": "imgUrl3", "placeholder": "", "alias": ""},
+        "sub_id_30": {"name": "box", "placeholder": "", "alias": ""},
+    }
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def create_campaign(self, name: str, domain: str, **kwargs: Any) -> dict:
         """Create a campaign in Keitaro. Returns dict with 'id' and 'alias'."""
@@ -218,6 +243,13 @@ class KeitaroClient:
         await self.ensure_authenticated()
         domain_id = await self._resolve_domain_id(domain)
         alias = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+
+        # Build parameters with buyer_name placeholder
+        params = dict(self.DEFAULT_PARAMETERS)
+        buyer_name = kwargs.get("buyer_name", "")
+        if buyer_name:
+            params["sub_id_7"] = {"name": "buyer_name", "placeholder": buyer_name, "alias": ""}
+
         body = {
             "name": name,
             "alias": alias,
@@ -225,9 +257,12 @@ class KeitaroClient:
             "cost_type": "CPC",
             "cost_value": 0,
             "cost_auto": True,
-            "type": "position",
+            "type": "weight",
+            "uniqueness_method": "ip_ua",
             "domain_id": domain_id,
             "group_id": kwargs.get("group_id", 0),
+            "traffic_source_id": kwargs.get("traffic_source_id", 1),
+            "parameters": params,
         }
         return await self._request("campaigns.create", body)
 
@@ -245,11 +280,15 @@ class KeitaroClient:
             "campaign_id": campaign_id,
             "type": "regular",
             "name": name,
-            "action_type": "campaign",
+            "action_type": "http",
+            "action_payload": "",
+            "schema": "landings",
             "weight": 100,
-            "offer_ids": offer_ids,
-            "filters": [{"name": "country", "mode": "accept", "payload": countries}],
+            "filter_or": False,
             "collect_clicks": True,
+            "offer_selection": "after_click",
+            "filters": [{"name": "country", "mode": "accept", "payload": countries}],
+            "offers": [{"offer_id": oid} for oid in offer_ids],
         }
         return await self._request("streams.create", body)
 
@@ -259,24 +298,27 @@ class KeitaroClient:
         await self.ensure_authenticated()
         body: dict[str, Any] = {
             "campaign_id": campaign_id,
-            "type": "regular",
-            "name": "Kloaka",
-            "action_type": "http",
+            "type": "forced",
+            "name": "БОТЫ И МОДЕРАЦИЯ",
+            "action_type": "curl",
             "action_payload": "https://google.com",
+            "schema": "redirect",
             "weight": 0,
+            "filter_or": True,
+            "collect_clicks": True,
+            "offer_selection": "before_click",
             "filters": [
-                {"name": "bot", "mode": "accept", "payload": []},
+                {"name": "bot", "mode": "accept", "payload": None},
                 {"name": "country", "mode": "reject", "payload": [geo]},
                 {
-                    "name": "sub_id",
+                    "name": "parameter",
                     "mode": "reject",
                     "payload": {
-                        "sub_id_name": "24242424ddda",
-                        "value": "fagrtgfr2211r",
+                        "value": ["fagrtgfr2211r"],
+                        "name": "24242424ddda",
                     },
                 },
             ],
-            "collect_clicks": False,
         }
         return await self._request("streams.create", body)
 
