@@ -175,13 +175,13 @@ class KeitaroClient:
     async def get_offers(self) -> list[dict]:
         """Get list of offers from Keitaro."""
         await self.ensure_authenticated()
-        return await self._request("offers.getAll", method="GET")
+        return await self._request("offers.index", method="GET")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def get_domains(self) -> list[dict]:
         """Get list of domains from Keitaro."""
         await self.ensure_authenticated()
-        return await self._request("domains.getAll", method="GET")
+        return await self._request("domains.index", method="GET")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def create_campaign(self, name: str, domain: str, **kwargs: Any) -> dict:
@@ -196,7 +196,7 @@ class KeitaroClient:
             "domain": domain,
             "group_id": kwargs.get("group_id", 0),
         }
-        return await self._request("campaigns.add", body)
+        return await self._request("campaigns.create", body)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def create_stream(
@@ -218,7 +218,7 @@ class KeitaroClient:
             "filters": [{"name": "country", "mode": "accept", "payload": countries}],
             "collect_clicks": True,
         }
-        return await self._request("streams.add", body)
+        return await self._request("streams.create", body)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def create_kloaka_stream(self, campaign_id: int, geo: str) -> dict:
@@ -245,7 +245,7 @@ class KeitaroClient:
             ],
             "collect_clicks": False,
         }
-        return await self._request("streams.add", body)
+        return await self._request("streams.create", body)
 
     async def get_all_conversions_by_ad(
         self,
