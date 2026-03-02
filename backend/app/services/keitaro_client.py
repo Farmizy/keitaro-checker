@@ -183,17 +183,31 @@ class KeitaroClient:
         await self.ensure_authenticated()
         return await self._request("domains.index", method="GET")
 
+    async def _resolve_domain_id(self, domain_name: str) -> int:
+        """Resolve domain name to domain_id from Keitaro."""
+        domains = await self.get_domains()
+        for d in domains:
+            if d.get("name") == domain_name:
+                return d["id"]
+        raise ValueError(f"Domain '{domain_name}' not found in Keitaro")
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def create_campaign(self, name: str, domain: str, **kwargs: Any) -> dict:
         """Create a campaign in Keitaro. Returns dict with 'id' and 'alias'."""
+        import secrets
+        import string
         await self.ensure_authenticated()
+        domain_id = await self._resolve_domain_id(domain)
+        alias = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
         body = {
             "name": name,
+            "alias": alias,
             "state": "active",
             "cost_type": "CPC",
             "cost_value": 0,
             "cost_auto": True,
-            "domain": domain,
+            "type": "position",
+            "domain_id": domain_id,
             "group_id": kwargs.get("group_id", 0),
         }
         return await self._request("campaigns.create", body)
