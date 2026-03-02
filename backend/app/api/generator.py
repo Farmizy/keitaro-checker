@@ -235,11 +235,11 @@ async def generate_campaigns(
 
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
+    logger.info(f"Generated {len(specs)} campaigns: {keitaro_results}")
     return StreamingResponse(
         stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="campaigns_{today}.xlsx"',
-            "X-Keitaro-Results": str(keitaro_results),
         },
     )
