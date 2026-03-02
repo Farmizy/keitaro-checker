@@ -73,7 +73,7 @@ class CampaignChecker:
             # 3. Fetch conversions from Keitaro
             logger.info("Fetching conversions from Keitaro...")
             try:
-                await self.keitaro.authenticate()
+                await self.keitaro.ensure_authenticated()
                 keitaro_conversions = await self.keitaro.get_all_conversions_by_ad()
                 logger.info(f"Got conversions for {len(keitaro_conversions)} ad IDs from Keitaro")
             except Exception as e:

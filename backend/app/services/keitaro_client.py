@@ -36,9 +36,17 @@ class KeitaroClient:
     async def close(self):
         await self._http.aclose()
 
+    async def ensure_authenticated(self) -> None:
+        """Authenticate only if not already authenticated."""
+        if self._session_id:
+            return
+        await self.authenticate()
+
     async def authenticate(self) -> None:
-        """Login and store session cookie in httpx cookie jar."""
-        # Use a fresh client for login to avoid cookie conflicts
+        """Login and store session cookie."""
+        # Clear any old cookies to get a fresh session
+        self._http.cookies.clear()
+
         resp = await self._http.post(
             f"{self.base_url}/admin/",
             params={"object": "auth.login"},
