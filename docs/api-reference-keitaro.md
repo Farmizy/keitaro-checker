@@ -131,9 +131,17 @@ POST /admin/?object=campaigns.withStats
 
 ```
 GET  /admin/?object=campaigns.listAsOptions   — список кампаний для выбора
-GET  /admin/?object=reports.definition         — определение доступных метрик/группировок
-GET  /admin/?object=system.trackerInfo         — информация о трекере
+GET  /admin/?object=campaigns.index           — полный список кампаний (массив объектов)
+POST /admin/?object=campaigns.create          — создание кампании (body: {name, domain, ...})
+GET  /admin/?object=offers.index              — список офферов (массив объектов с id, name, group_id)
+POST /admin/?object=offers.withStats          — офферы со статистикой (body: {range, columns, metrics, ...})
+GET  /admin/?object=domains.index             — список доменов (массив объектов с id, name, is_ssl, ...)
+POST /admin/?object=streams.create            — создание потока (body: {campaign_id, type, name, ...})
+GET  /admin/?object=reports.definition        — определение доступных метрик/группировок
+GET  /admin/?object=system.trackerInfo        — информация о трекере
 ```
+
+**Naming convention:** `{entity}.index` для списков, `{entity}.create` для создания. НЕ `.getAll`, `.list`, `.add` — возвращают 404.
 
 ## Sub-параметры (маппинг)
 
