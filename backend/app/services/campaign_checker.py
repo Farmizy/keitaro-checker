@@ -132,10 +132,6 @@ class CampaignChecker:
     ) -> str:
         """Process a single campaign. Returns 'skipped', 'checked', or 'action'."""
 
-        # Skip non-active campaigns in FB
-        if pc.effective_status != "ACTIVE":
-            return "skipped"
-
         # Match to DB account by name
         db_account = account_map.get(pc.account_name)
         if not db_account:
@@ -143,8 +139,12 @@ class CampaignChecker:
 
         fb_account_id = db_account["id"]
 
-        # Sync campaign to DB
+        # Always sync campaign status to DB (even if PAUSED)
         db_campaign = self._sync_campaign(pc, fb_account_id)
+
+        # Skip non-active campaigns in FB
+        if pc.effective_status != "ACTIVE":
+            return "skipped"
 
         # Skip non-managed or stopped campaigns
         if not db_campaign.get("is_managed", True):
