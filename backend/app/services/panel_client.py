@@ -95,7 +95,7 @@ class PanelClient:
                 internal_id=item["id"],
                 campaign_id=str(item.get("campaignId", "")),
                 name=item.get("name", ""),
-                daily_budget=float(item.get("dailyBudget", 0)),
+                daily_budget=float(item.get("dailyBudget") or 0),
                 effective_status=item.get("effectiveStatus", "UNKNOWN"),
                 spend=float(stats.get("spent", 0) or 0),
                 spend_with_tax=float(stats.get("spentWithTax", 0) or 0),
