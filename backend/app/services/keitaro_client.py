@@ -96,13 +96,23 @@ class KeitaroClient:
         self._session_id = session_id
         logger.info(f"Keitaro: authenticated successfully (session={session_id[:8]}...)")
 
-    async def _request(self, object_action: str, data: dict | None = None, method: str = "POST") -> Any:
+    async def _request(
+        self,
+        object_action: str,
+        data: dict | None = None,
+        method: str = "POST",
+        extra_params: dict | None = None,
+    ) -> Any:
         """Make a request to Keitaro internal API with auto re-login on 401/403."""
         if not self._session_id:
             raise RuntimeError("Not authenticated. Call authenticate() first.")
 
+        params = {"object": object_action}
+        if extra_params:
+            params.update(extra_params)
+
         kwargs: dict[str, Any] = {
-            "params": {"object": object_action},
+            "params": params,
             "cookies": {"keitaro": self._session_id},
         }
         if data is not None:
@@ -175,7 +185,7 @@ class KeitaroClient:
     async def get_offer_groups(self) -> list[dict]:
         """Get offer groups from Keitaro. Returns [{value: int, name: str}, ...]."""
         await self.ensure_authenticated()
-        return await self._request("groups.listAsOptions&type=offers", method="GET")
+        return await self._request("groups.listAsOptions", method="GET", extra_params={"type": "offers"})
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def get_offers(self, group_id: int | None = None) -> list[dict]:
