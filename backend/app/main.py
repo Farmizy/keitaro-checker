@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from app.api import accounts, campaigns, rules, logs, dashboard, scheduler
+from app.api import accounts, campaigns, rules, logs, dashboard, scheduler, generator
 from app.config import settings
 from app.services.panel_client import PanelClient
 from app.services.keitaro_client import KeitaroClient
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.panel = panel
+    app.state.keitaro = keitaro
     app.state.scheduler = sched
     sched.start()
 
@@ -75,6 +76,7 @@ app.include_router(rules.router, prefix="/api/v1/rules", tags=["rules"])
 app.include_router(logs.router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(dashboard.router, prefix="/api/v1/dashboard", tags=["dashboard"])
 app.include_router(scheduler.router, prefix="/api/v1/scheduler", tags=["scheduler"])
+app.include_router(generator.router, prefix="/api/v1/generator", tags=["generator"])
 
 
 @app.get("/health")

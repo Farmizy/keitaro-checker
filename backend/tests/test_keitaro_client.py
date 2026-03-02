@@ -130,6 +130,84 @@ class TestGetConversionsByAd:
             await client.get_conversions_by_ad()
 
 
+class TestCampaignGenerator:
+    """Tests for campaign generator methods."""
+
+    @pytest.mark.asyncio
+    async def test_get_offers(self, client):
+        client._session_id = "test-session"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"id": 1, "name": "Detoxil", "group_id": 5},
+            {"id": 2, "name": "Cardiform", "group_id": 5},
+        ]
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+            offers = await client.get_offers()
+        assert len(offers) == 2
+        assert offers[0]["name"] == "Detoxil"
+
+    @pytest.mark.asyncio
+    async def test_get_domains(self, client):
+        client._session_id = "test-session"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"id": 1, "name": "enersync-vigor.info"},
+            {"id": 2, "name": "other-domain.com"},
+        ]
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+            domains = await client.get_domains()
+        assert len(domains) == 2
+
+    @pytest.mark.asyncio
+    async def test_create_campaign(self, client):
+        client._session_id = "test-session"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "id": 100, "alias": "V23cKdGS", "name": "test campaign",
+        }
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+            campaign = await client.create_campaign(
+                name="test campaign", domain="enersync-vigor.info",
+            )
+        assert campaign["id"] == 100
+        assert campaign["alias"] == "V23cKdGS"
+
+    @pytest.mark.asyncio
+    async def test_create_stream(self, client):
+        client._session_id = "test-session"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"id": 200, "type": "regular"}
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+            stream = await client.create_stream(
+                campaign_id=100, offer_ids=[1], countries=["BG"],
+            )
+        assert stream["id"] == 200
+
+    @pytest.mark.asyncio
+    async def test_create_kloaka_stream(self, client):
+        client._session_id = "test-session"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"id": 201, "name": "Kloaka"}
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp) as mock_req:
+            stream = await client.create_kloaka_stream(campaign_id=100, geo="BG")
+        assert stream["id"] == 201
+        # Verify the request was made with correct filters
+        call_kwargs = mock_req.call_args
+        body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        assert body["name"] == "Kloaka"
+        assert body["action_payload"] == "https://google.com"
+
+
 class TestGetAllConversionsByAd:
     @pytest.mark.asyncio
     async def test_pagination(self, client):

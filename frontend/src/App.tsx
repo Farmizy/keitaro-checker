@@ -9,6 +9,7 @@ import CampaignsPage from "@/pages/CampaignsPage"
 import RulesPage from "@/pages/RulesPage"
 import LogsPage from "@/pages/LogsPage"
 import SettingsPage from "@/pages/SettingsPage"
+import GeneratorPage from "@/pages/GeneratorPage"
 import type { ReactNode } from "react"
 
 const queryClient = new QueryClient({
@@ -44,6 +45,7 @@ export default function App() {
               <Route path="rules" element={<RulesPage />} />
               <Route path="logs" element={<LogsPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="generator" element={<GeneratorPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

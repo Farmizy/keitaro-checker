@@ -169,6 +169,84 @@ class KeitaroClient:
 
         return ad_conversions
 
+    # --- Campaign Generator methods ---
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def get_offers(self) -> list[dict]:
+        """Get list of offers from Keitaro."""
+        await self.ensure_authenticated()
+        return await self._request("offers.getAll", method="GET")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def get_domains(self) -> list[dict]:
+        """Get list of domains from Keitaro."""
+        await self.ensure_authenticated()
+        return await self._request("domains.getAll", method="GET")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def create_campaign(self, name: str, domain: str, **kwargs: Any) -> dict:
+        """Create a campaign in Keitaro. Returns dict with 'id' and 'alias'."""
+        await self.ensure_authenticated()
+        body = {
+            "name": name,
+            "state": "active",
+            "cost_type": "CPC",
+            "cost_value": 0,
+            "cost_auto": True,
+            "domain": domain,
+            "group_id": kwargs.get("group_id", 0),
+        }
+        return await self._request("campaigns.add", body)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def create_stream(
+        self,
+        campaign_id: int,
+        offer_ids: list[int],
+        countries: list[str],
+        name: str = "ОСНОВНОЙ",
+    ) -> dict:
+        """Create main stream (ОСНОВНОЙ) with offer for a campaign."""
+        await self.ensure_authenticated()
+        body: dict[str, Any] = {
+            "campaign_id": campaign_id,
+            "type": "regular",
+            "name": name,
+            "action_type": "campaign",
+            "weight": 100,
+            "offer_ids": offer_ids,
+            "filters": [{"name": "country", "mode": "accept", "payload": countries}],
+            "collect_clicks": True,
+        }
+        return await self._request("streams.add", body)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def create_kloaka_stream(self, campaign_id: int, geo: str) -> dict:
+        """Create cloaking stream (redirect to google.com, bot/country filters)."""
+        await self.ensure_authenticated()
+        body: dict[str, Any] = {
+            "campaign_id": campaign_id,
+            "type": "regular",
+            "name": "Kloaka",
+            "action_type": "http",
+            "action_payload": "https://google.com",
+            "weight": 0,
+            "filters": [
+                {"name": "bot", "mode": "accept", "payload": []},
+                {"name": "country", "mode": "reject", "payload": [geo]},
+                {
+                    "name": "sub_id",
+                    "mode": "reject",
+                    "payload": {
+                        "sub_id_name": "24242424ddda",
+                        "value": "fagrtgfr2211r",
+                    },
+                },
+            ],
+            "collect_clicks": False,
+        }
+        return await self._request("streams.add", body)
+
     async def get_all_conversions_by_ad(
         self,
         interval: str = "today",

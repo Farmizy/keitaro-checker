@@ -131,3 +131,56 @@ export interface SchedulerStatus {
   interval_minutes: number
   next_run: string | null
 }
+
+// --- Campaign Generator ---
+
+export interface AccountProfile {
+  id: string
+  fb_account_id: string
+  page_id: string
+  pixel_id: string
+  instagram_id: string
+  default_geo: string
+  default_budget: number
+  custom_audiences: string
+  url_tags_template: string
+  default_language: string
+  additional_languages: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface AccountProfileCreate {
+  fb_account_id: string
+  page_id: string
+  pixel_id: string
+  instagram_id?: string
+  default_geo?: string
+  default_budget?: number
+  custom_audiences?: string
+  url_tags_template?: string
+}
+
+export interface KeitaroOffer {
+  id: number
+  name: string
+  group_id: number
+}
+
+export interface KeitaroDomain {
+  id: number
+  name: string
+}
+
+export interface CampaignFormEntry {
+  niche: string
+  geo: string
+  product_name: string
+  angle: string
+  domain: string
+  fb_account_id: string
+  offer_id: number | null
+  num_adsets: number
+  daily_budget: number
+  creative_version: string
+}

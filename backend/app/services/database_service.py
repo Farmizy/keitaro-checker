@@ -231,3 +231,31 @@ class DatabaseService:
             .execute()
         )
         return response.data[0] if response.data else None
+
+    # --- fb_account_profiles ---
+
+    def get_account_profiles(self) -> list[dict]:
+        response = self.client.table("fb_account_profiles").select("*").execute()
+        return response.data
+
+    def get_account_profile_by_account(self, fb_account_id: UUID) -> Optional[dict]:
+        response = (
+            self.client.table("fb_account_profiles")
+            .select("*")
+            .eq("fb_account_id", str(fb_account_id))
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def create_account_profile(self, data: dict[str, Any]) -> dict:
+        response = self.client.table("fb_account_profiles").insert(data).execute()
+        return response.data[0]
+
+    def update_account_profile(self, profile_id: UUID, data: dict[str, Any]) -> Optional[dict]:
+        response = (
+            self.client.table("fb_account_profiles")
+            .update(data)
+            .eq("id", str(profile_id))
+            .execute()
+        )
+        return response.data[0] if response.data else None
