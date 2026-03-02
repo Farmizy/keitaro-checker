@@ -46,6 +46,25 @@ async def list_domains(
     return await keitaro.get_domains()
 
 
+@router.get("/pages/{account_id}")
+async def list_pages(
+    account_id: UUID,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+    db: DatabaseService = Depends(get_db),
+):
+    """Get Facebook Pages for an account from Panel API."""
+    account = db.get_account(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    panel_id = account.get("panel_account_id")
+    if not panel_id:
+        raise HTTPException(status_code=400, detail="Account has no panel_account_id")
+    panel = request.app.state.panel
+    pages = await panel.get_account_pages(panel_id)
+    return [{"id": p.id, "name": p.name} for p in pages]
+
+
 @router.get("/account-profiles", response_model=list[AccountProfileResponse])
 async def list_account_profiles(
     _user: dict = Depends(get_current_user),

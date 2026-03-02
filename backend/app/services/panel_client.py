@@ -37,6 +37,13 @@ class PanelAccount:
     status: str
 
 
+@dataclass
+class PanelPage:
+    """Facebook Page from 2KK Panel API."""
+    id: str
+    name: str
+
+
 class PanelClient:
     def __init__(
         self,
@@ -208,6 +215,41 @@ class PanelClient:
         resp.raise_for_status()
         logger.info(f"Panel: campaigns {campaign_ids} status -> {status}")
         return True
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def get_account_pages(self, panel_account_id: int) -> list[PanelPage]:
+        """Fetch pages for a specific account from Panel API."""
+        from datetime import datetime
+        import zoneinfo
+        today = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d")
+
+        resp = await self._http.post(
+            f"{self.base_url}/accounts",
+            headers=self._headers(),
+            json={
+                "filter": {
+                    "startDate": today,
+                    "endDate": today,
+                    "withSpent": False,
+                },
+                "page": 1,
+                "limit": 100,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data.get("success"):
+            raise RuntimeError(f"Panel API error: {data}")
+
+        for item in data.get("data", []):
+            if item["id"] == panel_account_id:
+                return [
+                    PanelPage(id=p["id"], name=p.get("name", ""))
+                    for p in item.get("pages", [])
+                ]
+
+        return []
 
     async def pause_campaign(self, internal_id: int) -> bool:
         return await self.update_campaign_status([internal_id], "PAUSED")

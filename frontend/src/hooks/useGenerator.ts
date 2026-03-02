@@ -18,6 +18,15 @@ export function useDomains() {
   })
 }
 
+export function usePages(accountId: string | null) {
+  return useQuery({
+    queryKey: ["generator-pages", accountId],
+    queryFn: () => generatorApi.getPages(accountId!),
+    enabled: !!accountId,
+    staleTime: 60_000,
+  })
+}
+
 export function useProfiles() {
   return useQuery({
     queryKey: ["generator-profiles"],

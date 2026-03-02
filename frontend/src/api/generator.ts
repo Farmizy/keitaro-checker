@@ -17,6 +17,13 @@ export async function getDomains(): Promise<KeitaroDomain[]> {
   return data
 }
 
+export async function getPages(
+  accountId: string,
+): Promise<{ id: string; name: string }[]> {
+  const { data } = await api.get(`/generator/pages/${accountId}`)
+  return data
+}
+
 export async function getProfiles(): Promise<AccountProfile[]> {
   const { data } = await api.get("/generator/account-profiles")
   return data

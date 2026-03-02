@@ -7,6 +7,7 @@ import {
   useCreateProfile,
   useUpdateProfile,
   useGenerate,
+  usePages,
 } from "@/hooks/useGenerator"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -70,6 +71,9 @@ export default function GeneratorPage() {
   const createProfile = useCreateProfile()
   const updateProfile = useUpdateProfile()
   const generate = useGenerate()
+  const { data: pages, isLoading: pagesLoading } = usePages(
+    profileForm.fb_account_id || null,
+  )
 
   const [entries, setEntries] = useState<CampaignFormEntry[]>([emptyEntry()])
   const [profileDialogOpen, setProfileDialogOpen] = useState(false)
@@ -474,14 +478,31 @@ export default function GeneratorPage() {
               <label className="mb-1 block text-xs text-muted-foreground">
                 Page ID
               </label>
-              <Input
-                placeholder="108126015392349"
-                value={profileForm.page_id}
-                onChange={(e) =>
-                  setProfileForm((f) => ({ ...f, page_id: e.target.value }))
-                }
-                required
-              />
+              {pages && pages.length > 0 ? (
+                <Select
+                  value={profileForm.page_id}
+                  onChange={(e) =>
+                    setProfileForm((f) => ({ ...f, page_id: e.target.value }))
+                  }
+                  required
+                >
+                  <option value="">—</option>
+                  {pages.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.id})
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  placeholder={pagesLoading ? "Загрузка..." : "108126015392349"}
+                  value={profileForm.page_id}
+                  onChange={(e) =>
+                    setProfileForm((f) => ({ ...f, page_id: e.target.value }))
+                  }
+                  required
+                />
+              )}
             </div>
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
