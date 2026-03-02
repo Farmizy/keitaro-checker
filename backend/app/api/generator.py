@@ -154,24 +154,37 @@ async def generate_campaigns(
         )
 
         # 2. Create campaign in Keitaro → get alias
-        keitaro_campaign = await keitaro.create_campaign(
-            name=keitaro_name, domain=entry.domain,
-            buyer_name=buyer_name,
-        )
+        try:
+            keitaro_campaign = await keitaro.create_campaign(
+                name=keitaro_name, domain=entry.domain,
+                buyer_name=buyer_name,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to create Keitaro campaign: {exc}")
+            raise HTTPException(status_code=500, detail=f"Keitaro campaign creation failed: {exc}")
         keitaro_id = keitaro_campaign["id"]
         alias = keitaro_campaign.get("alias", "")
         logger.info(f"Created Keitaro campaign #{keitaro_id} alias={alias}")
 
         # 3. Create streams: Kloaka + ОСНОВНОЙ
-        await keitaro.create_kloaka_stream(
-            campaign_id=keitaro_id, geo=entry.geo,
-        )
-        if entry.offer_id:
-            await keitaro.create_stream(
-                campaign_id=keitaro_id,
-                offer_ids=[entry.offer_id],
-                countries=[entry.geo],
+        try:
+            await keitaro.create_kloaka_stream(
+                campaign_id=keitaro_id, geo=entry.geo,
             )
+            logger.info(f"Created Kloaka stream for campaign #{keitaro_id}")
+        except Exception as exc:
+            logger.error(f"Failed to create Kloaka stream for campaign #{keitaro_id}: {exc}")
+
+        if entry.offer_id:
+            try:
+                await keitaro.create_stream(
+                    campaign_id=keitaro_id,
+                    offer_ids=[entry.offer_id],
+                    countries=[entry.geo],
+                )
+                logger.info(f"Created ОСНОВНОЙ stream for campaign #{keitaro_id}")
+            except Exception as exc:
+                logger.error(f"Failed to create ОСНОВНОЙ stream for campaign #{keitaro_id}: {exc}")
 
         # 4. Build landing URL from alias
         landing_url = f"https://{entry.domain}/{alias}"
