@@ -172,10 +172,19 @@ class KeitaroClient:
     # --- Campaign Generator methods ---
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
-    async def get_offers(self) -> list[dict]:
-        """Get list of offers from Keitaro."""
+    async def get_offer_groups(self) -> list[dict]:
+        """Get offer groups from Keitaro. Returns [{value: int, name: str}, ...]."""
         await self.ensure_authenticated()
-        return await self._request("offers.index", method="GET")
+        return await self._request("groups.listAsOptions&type=offers", method="GET")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def get_offers(self, group_id: int | None = None) -> list[dict]:
+        """Get list of offers from Keitaro, optionally filtered by group."""
+        await self.ensure_authenticated()
+        all_offers = await self._request("offers.index", method="GET")
+        if group_id is not None:
+            return [o for o in all_offers if o.get("group_id") == group_id]
+        return all_offers
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def get_domains(self) -> list[dict]:

@@ -31,9 +31,15 @@ async def list_offers(
     request: Request,
     _user: dict = Depends(get_current_user),
 ):
-    """Get list of offers from Keitaro."""
+    """Get list of offers from Keitaro, filtered by user's group."""
     keitaro = request.app.state.keitaro
-    return await keitaro.get_offers()
+    # Auto-detect group by Keitaro login name
+    groups = await keitaro.get_offer_groups()
+    user_group = next(
+        (g for g in groups if g["name"] == keitaro._login), None,
+    )
+    group_id = user_group["value"] if user_group else None
+    return await keitaro.get_offers(group_id=group_id)
 
 
 @router.get("/domains")
