@@ -23,8 +23,15 @@ class KeitaroClient:
         self.base_url = (base_url or settings.keitaro_url).rstrip("/")
         self._login = login or settings.keitaro_login
         self._password = password or settings.keitaro_password
-        self._http = httpx.AsyncClient(timeout=30)
-        self._authenticated = False
+        self._http = httpx.AsyncClient(
+            timeout=30,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/plain, */*",
+            },
+        )
+        self._session_id: str | None = None
 
     async def close(self):
         await self._http.aclose()
@@ -78,18 +85,17 @@ class KeitaroClient:
             )
             raise RuntimeError("Keitaro login failed: no session cookie returned")
 
-        # Set cookie on the httpx client for all future requests
-        self._http.cookies.set("keitaro", session_id, domain=httpx.URL(self.base_url).host)
-        self._authenticated = True
+        self._session_id = session_id
         logger.info(f"Keitaro: authenticated successfully (session={session_id[:8]}...)")
 
     async def _request(self, object_action: str, data: dict | None = None, method: str = "POST") -> Any:
         """Make a request to Keitaro internal API with auto re-login on 401/403."""
-        if not self._authenticated:
+        if not self._session_id:
             raise RuntimeError("Not authenticated. Call authenticate() first.")
 
         kwargs: dict[str, Any] = {
             "params": {"object": object_action},
+            "cookies": {"keitaro": self._session_id},
         }
         if data is not None:
             kwargs["json"] = data
@@ -98,10 +104,14 @@ class KeitaroClient:
 
         logger.debug(f"Keitaro _request({object_action}): status={resp.status_code}")
 
-        # Re-login on auth failure (only once)
+        # Log response body on auth failure for debugging
         if resp.status_code in (401, 403):
-            logger.warning(f"Keitaro: got {resp.status_code} for {object_action}, re-authenticating...")
+            logger.warning(
+                f"Keitaro: got {resp.status_code} for {object_action}, "
+                f"body={resp.text[:300]}, re-authenticating..."
+            )
             await self.authenticate()
+            kwargs["cookies"] = {"keitaro": self._session_id}
             resp = await self._http.request(method, f"{self.base_url}/admin/", **kwargs)
 
         resp.raise_for_status()
