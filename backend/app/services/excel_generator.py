@@ -74,6 +74,7 @@ FB_COLUMNS = [
     # Ad level
     "Ad Status",
     "Ad Name",
+    "Dynamic Creative Ad Format",
     "Creative Type",
     "URL Tags",
     "Instagram Account ID (New)",
@@ -189,6 +190,7 @@ def _build_row(
         # Ad level
         "Ad Status": "ACTIVE",
         "Ad Name": str(ad_num),
+        "Dynamic Creative Ad Format": "Automatic Format",
         "Creative Type": "Link Page Post Ad",
         "URL Tags": spec.url_tags,
         "Instagram Account ID (New)": (
