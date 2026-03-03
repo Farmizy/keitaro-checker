@@ -53,13 +53,11 @@ class CampaignChecker:
             now = datetime.now(MOSCOW_TZ)
             today = now.strftime("%Y-%m-%d")
 
-            # 1. Sync accounts from Panel if DB is empty
+            # 1. Sync accounts from Panel every cycle
+            logger.info("Syncing accounts from Panel...")
+            await self._sync_accounts_from_panel(today)
             db_accounts = self.db.get_active_accounts()
-            if not db_accounts:
-                logger.info("No accounts in DB, syncing from Panel...")
-                await self._sync_accounts_from_panel(today)
-                db_accounts = self.db.get_active_accounts()
-                logger.info(f"Synced {len(db_accounts)} accounts")
+            logger.info(f"Got {len(db_accounts)} accounts from DB")
 
             # 2. Fetch campaigns from Panel API (with spend)
             logger.info("Fetching campaigns from Panel API...")
