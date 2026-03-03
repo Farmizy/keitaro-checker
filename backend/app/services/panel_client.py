@@ -28,6 +28,7 @@ class PanelCampaign:
     account_name: str
     currency: str
     panel_account_id: int = 0  # Panel account ID (from account.id in campaign response)
+    fb_ad_account_id: str = ""  # Real FB ad account ID from cab object
 
 
 @dataclass
@@ -96,11 +97,32 @@ class PanelClient:
         if not data.get("success"):
             raise RuntimeError(f"Panel API error: {data}")
 
+        items = data.get("data", [])
+
+        # Log full structure of first campaign to find FB account ID
+        if items:
+            first = items[0]
+            logger.info(f"Panel campaigns - top-level keys: {list(first.keys())}")
+            logger.info(f"Panel campaigns - cab: {first.get('cab')}")
+            logger.info(f"Panel campaigns - account: {first.get('account')}")
+
         campaigns = []
-        for item in data.get("data", []):
+        for item in items:
             stats = item.get("stats", {})
             cab = item.get("cab", {})
             account = item.get("account", {})
+
+            # Try to extract real FB ad account ID from cab or item
+            fb_ad_account_id = str(
+                cab.get("accountId", "")
+                or cab.get("id", "")
+                or cab.get("adAccountId", "")
+                or cab.get("fbAccountId", "")
+                or item.get("adAccountId", "")
+                or item.get("accountId", "")
+                or ""
+            )
+
             campaigns.append(PanelCampaign(
                 internal_id=item["id"],
                 campaign_id=str(item.get("campaignId", "")),
@@ -113,6 +135,7 @@ class PanelClient:
                 account_name=account.get("name", ""),
                 currency=cab.get("currency", "USD"),
                 panel_account_id=int(account.get("id", 0) or 0),
+                fb_ad_account_id=fb_ad_account_id,
             ))
 
         return campaigns
@@ -175,16 +198,29 @@ class PanelClient:
 
         items = data.get("data", [])
         if items:
-            logger.debug(f"Panel API account keys: {list(items[0].keys())}")
-            filtered = {k: v for k, v in items[0].items() if k in ('id', 'name', 'accountId', 'fbAccountId', 'account_id', 'externalId', 'cab')}
-            logger.debug(f"Panel API first account: {filtered}")
+            first = items[0]
+            logger.info(f"Panel API account keys: {list(first.keys())}")
+            # Log all potentially relevant fields for finding FB account ID
+            id_fields = {
+                k: v for k, v in first.items()
+                if k in ('id', 'name', 'accountId', 'fbAccountId', 'account_id',
+                         'externalId', 'adAccountId', 'fbId', 'cab')
+                or 'account' in k.lower() or 'id' in k.lower() or 'cab' in k.lower()
+            }
+            logger.info(f"Panel API first account ID-related fields: {id_fields}")
 
         return [
             PanelAccount(
                 internal_id=item["id"],
                 name=item.get("name", ""),
                 status=item.get("status", "UNKNOWN"),
-                fb_account_id=str(item.get("accountId", "")),
+                fb_account_id=str(
+                    item.get("accountId", "")
+                    or item.get("adAccountId", "")
+                    or item.get("fbAccountId", "")
+                    or item.get("externalId", "")
+                    or ""
+                ),
             )
             for item in items
         ]

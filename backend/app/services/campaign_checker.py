@@ -68,6 +68,9 @@ class CampaignChecker:
             )
             logger.info(f"Got {len(panel_campaigns)} campaigns from Panel")
 
+            # 2b. Update accounts with real FB ad account IDs from campaign data
+            self._update_account_fb_ids(panel_campaigns)
+
             # 3. Fetch conversions from Keitaro (grouped by campaign_id via sub_id_2)
             logger.info("Fetching conversions from Keitaro...")
             keitaro_conversions: dict[str, int] = {}
@@ -219,6 +222,18 @@ class CampaignChecker:
 
         return "action" if success else "checked"
 
+    def _update_account_fb_ids(self, campaigns: list):
+        """Update accounts with real FB ad account IDs extracted from campaign cab data."""
+        fb_ids_by_panel_account: dict[int, str] = {}
+        for pc in campaigns:
+            if pc.fb_ad_account_id and pc.panel_account_id and pc.fb_ad_account_id != "0":
+                fb_ids_by_panel_account[pc.panel_account_id] = pc.fb_ad_account_id
+
+        for panel_id, fb_id in fb_ids_by_panel_account.items():
+            clean_id = fb_id.replace("act_", "")
+            self.db.upsert_account_by_panel_id(panel_id, {"account_id": clean_id})
+            logger.info(f"Updated account panel_id={panel_id} with real FB account ID: {clean_id}")
+
     async def _sync_accounts_from_panel(self, today: str):
         """Pull accounts from Panel API and upsert into DB."""
         panel_accounts = await self.panel.get_accounts(
@@ -230,11 +245,14 @@ class CampaignChecker:
                 "panel_account_id": pa.internal_id,
                 "is_active": True,
             }
-            # Store real FB account ID if available, otherwise fallback
+            # Store real FB account ID if available from accounts API
             if pa.fb_account_id and pa.fb_account_id != "0":
                 account_data["account_id"] = pa.fb_account_id
             else:
-                account_data["account_id"] = f"panel_{pa.internal_id}"
+                # Only set panel_XXXX fallback if account doesn't already have a real ID
+                existing = self.db.get_account_by_panel_id(pa.internal_id)
+                if not existing or (existing.get("account_id", "").startswith("panel_")):
+                    account_data["account_id"] = f"panel_{pa.internal_id}"
             self.db.upsert_account_by_panel_id(pa.internal_id, account_data)
 
     def _sync_campaign(self, pc: PanelCampaign, fb_account_id: str) -> dict:

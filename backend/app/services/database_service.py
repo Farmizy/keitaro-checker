@@ -83,6 +83,16 @@ class DatabaseService:
         )
         return [_decrypt_fields(row) for row in response.data]
 
+    def get_account_by_panel_id(self, panel_id: int) -> Optional[dict]:
+        """Get account by panel_account_id."""
+        response = (
+            self.client.table("fb_accounts")
+            .select("*")
+            .eq("panel_account_id", panel_id)
+            .execute()
+        )
+        return _decrypt_fields(response.data[0]) if response.data else None
+
     def upsert_account_by_panel_id(self, panel_id: int, data: dict[str, Any]) -> dict:
         """Upsert account by panel_account_id."""
         existing = (
