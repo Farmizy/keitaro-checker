@@ -176,7 +176,8 @@ class PanelClient:
         items = data.get("data", [])
         if items:
             logger.debug(f"Panel API account keys: {list(items[0].keys())}")
-            logger.debug(f"Panel API first account: {{{k}: {v} for k, v in items[0].items() if k in ('id', 'name', 'accountId', 'fbAccountId', 'account_id', 'externalId', 'cab')}}")
+            filtered = {k: v for k, v in items[0].items() if k in ('id', 'name', 'accountId', 'fbAccountId', 'account_id', 'externalId', 'cab')}
+            logger.debug(f"Panel API first account: {filtered}")
 
         return [
             PanelAccount(
