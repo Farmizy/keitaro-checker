@@ -23,6 +23,7 @@ GEO_TO_LANGUAGE = {
     "SI": "Slovenian",
     "RS": "Serbian",
     "GR": "Greek",
+    "IT": "Italian",
 }
 
 BASE_LANGUAGES = ["Albanian", "Chinese (Simplified)", "Georgian"]
@@ -83,8 +84,18 @@ FB_COLUMNS = [
     "Additional Language 3",
     "Additional Language 4",
     "Title",
+    "Additional Title 1",
+    "Additional Title 2",
+    "Additional Title 3",
+    "Additional Title 4",
     "Body",
+    "Additional Body 1",
+    "Additional Body 2",
+    "Additional Body 3",
+    "Additional Body 4",
     "Display Link",
+    "Optimize text per person",
+    "Conversion Tracking Pixels",
     "Creative Type",
     "URL Tags",
     "Instagram Account ID (New)",
@@ -197,11 +208,14 @@ def _build_row(
         # Ad level
         "Ad Status": "ACTIVE",
         "Ad Name": str(ad_num),
-        "Dynamic Creative Ad Format": "Automatic Format",
+        "Dynamic Creative Ad Format": "Single Video",
         "Default Language": spec.default_language,
+        # Title/Body — placeholders per language (user edits in FB UI)
         "Title": ".",
         "Body": ".",
         "Display Link": "",
+        "Optimize text per person": "No",
+        "Conversion Tracking Pixels": f"tp:{spec.pixel_id}",
         "Creative Type": "Link Page Post Ad",
         "URL Tags": spec.url_tags,
         "Instagram Account ID (New)": (
@@ -210,7 +224,10 @@ def _build_row(
         "Call to Action": "LEARN_MORE",
     }
 
+    # Fill Additional Language + Additional Title/Body per language
     for i, lang in enumerate(languages):
         row[f"Additional Language {i + 1}"] = lang
+        row[f"Additional Title {i + 1}"] = "."
+        row[f"Additional Body {i + 1}"] = "."
 
     return row

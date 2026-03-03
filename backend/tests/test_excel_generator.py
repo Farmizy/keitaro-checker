@@ -161,7 +161,7 @@ class TestGenerateFbExcel:
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
         col = headers.index("Dynamic Creative Ad Format") + 1
-        assert ws.cell(row=2, column=col).value == "Automatic Format"
+        assert ws.cell(row=2, column=col).value == "Single Video"
 
     def test_no_targeting_relaxation_column(self):
         """Targeting Relaxation removed — was causing FB import errors."""
@@ -178,3 +178,49 @@ class TestGenerateFbExcel:
         headers = [cell.value for cell in ws[1]]
         col = headers.index("Brand Safety Inventory Filtering Levels") + 1
         assert ws.cell(row=2, column=col).value == "FACEBOOK_RELAXED, AN_RELAXED"
+
+    def test_title_and_body_placeholders(self):
+        """Title and Body filled with placeholder '.' for each language."""
+        specs = [_make_spec(geo="PL", num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+
+        # Default Title/Body
+        title_col = headers.index("Title") + 1
+        body_col = headers.index("Body") + 1
+        assert ws.cell(row=2, column=title_col).value == "."
+        assert ws.cell(row=2, column=body_col).value == "."
+
+        # Additional Title/Body per language (4 languages for PL)
+        for i in range(1, 5):
+            t_col = headers.index(f"Additional Title {i}") + 1
+            b_col = headers.index(f"Additional Body {i}") + 1
+            assert ws.cell(row=2, column=t_col).value == "."
+            assert ws.cell(row=2, column=b_col).value == "."
+
+    def test_ad_level_conversion_tracking_pixels(self):
+        """Ad-level Conversion Tracking Pixels = tp:<pixel_id>."""
+        specs = [_make_spec(pixel_id="99999", num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        col = headers.index("Conversion Tracking Pixels") + 1
+        assert ws.cell(row=2, column=col).value == "tp:99999"
+
+    def test_optimize_text_per_person_no(self):
+        specs = [_make_spec(num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        col = headers.index("Optimize text per person") + 1
+        assert ws.cell(row=2, column=col).value == "No"
+
+    def test_italian_language_for_it_geo(self):
+        """IT geo should get Italian as 4th additional language."""
+        specs = [_make_spec(geo="IT", num_adsets=1)]
+        wb = generate_fb_excel(specs)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        lang4_col = headers.index("Additional Language 4") + 1
+        assert ws.cell(row=2, column=lang4_col).value == "Italian"
