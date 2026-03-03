@@ -27,6 +27,7 @@ class PanelCampaign:
     leads_fb: int  # FB-reported leads (we use Keitaro leads instead)
     account_name: str
     currency: str
+    panel_account_id: int = 0  # Panel account ID (from account.id in campaign response)
 
 
 @dataclass
@@ -99,6 +100,7 @@ class PanelClient:
         for item in data.get("data", []):
             stats = item.get("stats", {})
             cab = item.get("cab", {})
+            account = item.get("account", {})
             campaigns.append(PanelCampaign(
                 internal_id=item["id"],
                 campaign_id=str(item.get("campaignId", "")),
@@ -108,8 +110,9 @@ class PanelClient:
                 spend=float(stats.get("spent", 0) or 0),
                 spend_with_tax=float(stats.get("spentWithTax", 0) or 0),
                 leads_fb=int(stats.get("lead", 0) or 0),
-                account_name=item.get("account", {}).get("name", ""),
+                account_name=account.get("name", ""),
                 currency=cab.get("currency", "USD"),
+                panel_account_id=int(account.get("id", 0) or 0),
             ))
 
         return campaigns

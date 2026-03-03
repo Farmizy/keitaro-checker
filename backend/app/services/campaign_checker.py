@@ -80,14 +80,20 @@ class CampaignChecker:
             except Exception as e:
                 logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
 
-            # 4. Build account name → DB account mapping
-            account_map = {acc["name"]: acc for acc in db_accounts}
+            # 4. Build account mappings (prefer panel_account_id, fallback to name)
+            account_by_panel_id = {
+                acc["panel_account_id"]: acc
+                for acc in db_accounts
+                if acc.get("panel_account_id")
+            }
+            account_by_name = {acc["name"]: acc for acc in db_accounts}
 
-            # 4. Process each campaign
+            # 5. Process each campaign
             for pc in panel_campaigns:
                 try:
                     result = await self._process_campaign(
-                        pc, account_map, keitaro_conversions, now,
+                        pc, account_by_panel_id, account_by_name,
+                        keitaro_conversions, now,
                     )
                     if result == "checked":
                         campaigns_checked += 1
@@ -126,18 +132,24 @@ class CampaignChecker:
     async def _process_campaign(
         self,
         pc: PanelCampaign,
-        account_map: dict,
+        account_by_panel_id: dict,
+        account_by_name: dict,
         keitaro_conversions: dict[str, int],
         now: datetime,
     ) -> str:
         """Process a single campaign. Returns 'skipped', 'checked', or 'action'."""
 
-        # Match to DB account by name
-        db_account = account_map.get(pc.account_name)
+        # Match to DB account: prefer panel_account_id, fallback to name
+        db_account = None
+        if pc.panel_account_id:
+            db_account = account_by_panel_id.get(pc.panel_account_id)
+        if not db_account:
+            db_account = account_by_name.get(pc.account_name)
         if not db_account:
             logger.warning(
                 f"Campaign {pc.name} ({pc.campaign_id}): "
-                f"account '{pc.account_name}' not found in DB — skipped"
+                f"account '{pc.account_name}' (panel_id={pc.panel_account_id}) "
+                f"not found in DB — skipped"
             )
             return "skipped"
 
@@ -215,12 +227,17 @@ class CampaignChecker:
             start_date=today, end_date=today,
         )
         for pa in panel_accounts:
-            self.db.upsert_account_by_panel_id(pa.internal_id, {
+            account_data = {
                 "name": pa.name,
-                "account_id": f"panel_{pa.internal_id}",
                 "panel_account_id": pa.internal_id,
                 "is_active": True,
-            })
+            }
+            # Store real FB account ID if available, otherwise fallback
+            if pa.fb_account_id and pa.fb_account_id != "0":
+                account_data["account_id"] = pa.fb_account_id
+            else:
+                account_data["account_id"] = f"panel_{pa.internal_id}"
+            self.db.upsert_account_by_panel_id(pa.internal_id, account_data)
 
     def _sync_campaign(self, pc: PanelCampaign, fb_account_id: str) -> dict:
         """Sync Panel campaign data to DB, preserving 'stopped' status."""
