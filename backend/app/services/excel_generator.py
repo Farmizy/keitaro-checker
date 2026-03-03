@@ -98,6 +98,7 @@ FB_COLUMNS = [
     "Conversion Tracking Pixels",
     "Creative Type",
     "URL Tags",
+    "Video File Name",
     "Instagram Account ID (New)",
     "Call to Action",
 ]
@@ -218,6 +219,7 @@ def _build_row(
         "Conversion Tracking Pixels": f"tp:{spec.pixel_id}",
         "Creative Type": "Link Page Post Ad",
         "URL Tags": spec.url_tags,
+        "Video File Name": f"video_{ad_num}.mp4",
         "Instagram Account ID (New)": (
             f"x:{spec.instagram_id}" if spec.instagram_id else ""
         ),
