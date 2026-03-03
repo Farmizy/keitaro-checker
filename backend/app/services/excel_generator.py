@@ -96,7 +96,7 @@ class CampaignSpec:
     custom_audiences: str
     url_tags: str
     beneficiary: str = ""
-    age_min: int = 25
+    age_min: int = 50
     age_max: int = 65
     default_language: str = "Arabic"
     additional_languages: list[str] = field(default_factory=list)
