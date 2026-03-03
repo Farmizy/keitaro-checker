@@ -70,15 +70,15 @@ class CampaignChecker:
             )
             logger.info(f"Got {len(panel_campaigns)} campaigns from Panel")
 
-            # 3. Fetch conversions from Keitaro
+            # 3. Fetch conversions from Keitaro (grouped by campaign_id via sub_id_2)
             logger.info("Fetching conversions from Keitaro...")
+            keitaro_conversions: dict[str, int] = {}
             try:
                 await self.keitaro.ensure_authenticated()
-                keitaro_conversions = await self.keitaro.get_all_conversions_by_ad()
-                logger.info(f"Got conversions for {len(keitaro_conversions)} ad IDs from Keitaro")
+                keitaro_conversions = await self.keitaro.get_all_conversions_by_campaign()
+                logger.info(f"Got conversions for {len(keitaro_conversions)} campaign IDs from Keitaro")
             except Exception as e:
                 logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
-                keitaro_conversions = {}
 
             # 4. Build account name → DB account mapping
             account_map = {acc["name"]: acc for acc in db_accounts}
@@ -135,6 +135,10 @@ class CampaignChecker:
         # Match to DB account by name
         db_account = account_map.get(pc.account_name)
         if not db_account:
+            logger.warning(
+                f"Campaign {pc.name} ({pc.campaign_id}): "
+                f"account '{pc.account_name}' not found in DB — skipped"
+            )
             return "skipped"
 
         fb_account_id = db_account["id"]
@@ -144,17 +148,28 @@ class CampaignChecker:
 
         # Skip non-active campaigns in FB
         if pc.effective_status != "ACTIVE":
+            logger.debug(f"Campaign {pc.name}: FB status {pc.effective_status} — skipped")
             return "skipped"
 
         # Skip non-managed or stopped campaigns
         if not db_campaign.get("is_managed", True):
+            logger.debug(f"Campaign {pc.name}: not managed — skipped")
             return "skipped"
         if db_campaign.get("status") == "stopped":
+            logger.debug(f"Campaign {pc.name}: stopped in DB — skipped")
             return "skipped"
 
-        # Leads: use Panel's FB leads for now
-        # TODO: switch to Keitaro leads when ad→campaign mapping is available
-        leads = pc.leads_fb
+        # Leads: prefer Keitaro (sub_id_2 = campaign_id), fallback to Panel FB leads
+        keitaro_leads = keitaro_conversions.get(pc.campaign_id, None)
+        if keitaro_leads is not None:
+            leads = keitaro_leads
+        else:
+            leads = pc.leads_fb
+            if keitaro_conversions:
+                logger.debug(
+                    f"Campaign {pc.name}: no Keitaro data for campaign_id "
+                    f"{pc.campaign_id}, using Panel leads ({leads})"
+                )
 
         state = CampaignState(
             spend=pc.spend,
@@ -223,8 +238,14 @@ class CampaignChecker:
         }
 
         if existing:
-            # Preserve "stopped" status — only system can un-stop manually
-            if existing.get("status") != "stopped":
+            if existing.get("status") == "stopped" and pc.effective_status == "ACTIVE":
+                # Campaign was stopped by system but manually restarted in FB
+                logger.info(
+                    f"Campaign {pc.name} ({pc.campaign_id}) was stopped but "
+                    f"restarted in FB — unlocking to active"
+                )
+                update_data["status"] = "active"
+            elif existing.get("status") != "stopped":
                 update_data["status"] = (
                     "active" if pc.effective_status == "ACTIVE" else "paused"
                 )

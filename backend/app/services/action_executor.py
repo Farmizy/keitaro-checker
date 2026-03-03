@@ -1,6 +1,7 @@
 """Executes rule engine decisions via Panel API and logs to DB."""
 
-from datetime import datetime, timezone
+import zoneinfo
+from datetime import datetime
 
 from loguru import logger
 
@@ -52,7 +53,7 @@ class ActionExecutor:
             if success:
                 self.db.update_campaign(campaign_db_id, {
                     "current_budget": action.target_budget,
-                    "last_budget_change_at": datetime.now(timezone.utc).isoformat(),
+                    "last_budget_change_at": datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).isoformat(),
                 })
         except Exception as e:
             error_msg = str(e)

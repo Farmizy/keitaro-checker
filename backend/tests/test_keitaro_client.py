@@ -27,20 +27,26 @@ class TestAuthenticate:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"status": "ok"}
         mock_resp.cookies = _make_cookies_mock({"keitaro": "session123"})
+        mock_resp.headers = {}
 
         with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp):
-            result = await client.authenticate()
+            await client.authenticate()
 
-        assert result == "session123"
-        assert client._session_cookie == "session123"
+        assert client._session_id == "session123"
 
     @pytest.mark.asyncio
     async def test_login_no_cookie_raises(self, client):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"status": "ok"}
         mock_resp.cookies = _make_cookies_mock({})
+        mock_resp.headers = MagicMock()
+        mock_resp.headers.get_list = MagicMock(return_value=[])
+        mock_resp.headers.get = MagicMock(return_value="NONE")
+        mock_resp.text = ""
 
         with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp):
             with pytest.raises(RuntimeError, match="no session cookie"):
@@ -50,7 +56,7 @@ class TestAuthenticate:
 class TestGetConversionsByAd:
     @pytest.mark.asyncio
     async def test_parses_response(self, client):
-        client._session_cookie = "test-session"
+        client._session_id = "test-session"
 
         api_response = {
             "rows": [
@@ -78,7 +84,7 @@ class TestGetConversionsByAd:
 
     @pytest.mark.asyncio
     async def test_empty_response(self, client):
-        client._session_cookie = "test-session"
+        client._session_id = "test-session"
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -92,10 +98,11 @@ class TestGetConversionsByAd:
 
     @pytest.mark.asyncio
     async def test_relogin_on_401(self, client):
-        client._session_cookie = "expired-session"
+        client._session_id = "expired-session"
 
         resp_401 = MagicMock()
         resp_401.status_code = 401
+        resp_401.text = "Unauthorized"
 
         resp_ok = MagicMock()
         resp_ok.status_code = 200
@@ -108,7 +115,12 @@ class TestGetConversionsByAd:
         login_resp = MagicMock()
         login_resp.status_code = 200
         login_resp.raise_for_status = MagicMock()
+        login_resp.json.return_value = {"status": "ok"}
         login_resp.cookies = _make_cookies_mock({"keitaro": "new-session"})
+        login_resp.headers = MagicMock()
+        login_resp.headers.get_list = MagicMock(return_value=[])
+        login_resp.headers.get = MagicMock(return_value="NONE")
+        login_resp.text = ""
 
         with patch.object(
             client._http, "request",
@@ -122,7 +134,7 @@ class TestGetConversionsByAd:
             result = await client.get_conversions_by_ad()
 
         assert result == {"123": 1}
-        assert client._session_cookie == "new-session"
+        assert client._session_id == "new-session"
 
     @pytest.mark.asyncio
     async def test_not_authenticated_raises(self, client):
@@ -208,10 +220,54 @@ class TestCampaignGenerator:
         assert body["action_payload"] == "https://google.com"
 
 
+class TestGetConversionsByCampaign:
+    @pytest.mark.asyncio
+    async def test_parses_response(self, client):
+        client._session_id = "test-session"
+
+        api_response = {
+            "rows": [
+                {"sub_id_2": "120238209447240519", "conversions": 10},
+                {"sub_id_2": "120240131659510277", "conversions": 5},
+                {"sub_id_2": "", "conversions": 3},
+                {"sub_id_2": "{{campaign_id}}", "conversions": 2},
+                {"sub_id_2": "120299999999999999", "conversions": 0},
+            ],
+            "total": 5,
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = api_response
+
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+            result = await client.get_conversions_by_campaign()
+
+        assert result == {
+            "120238209447240519": 10,
+            "120240131659510277": 5,
+        }
+
+    @pytest.mark.asyncio
+    async def test_empty_response(self, client):
+        client._session_id = "test-session"
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"rows": [], "total": 0}
+
+        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+            result = await client.get_conversions_by_campaign()
+
+        assert result == {}
+
+
 class TestGetAllConversionsByAd:
     @pytest.mark.asyncio
     async def test_pagination(self, client):
-        client._session_cookie = "test-session"
+        client._session_id = "test-session"
 
         page1_data = {
             "rows": [

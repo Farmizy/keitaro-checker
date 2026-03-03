@@ -360,3 +360,71 @@ class KeitaroClient:
             offset += limit
 
         return all_conversions
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def get_conversions_by_campaign(
+        self,
+        interval: str = "today",
+        timezone: str = "Europe/Moscow",
+        limit: int = 500,
+        offset: int = 0,
+    ) -> dict[str, int]:
+        """Get conversion counts grouped by sub_id_2 (Facebook Campaign ID).
+
+        Returns:
+            Dict mapping campaign_id -> conversion count.
+        """
+        body = {
+            "range": {
+                "interval": interval,
+                "timezone": timezone,
+            },
+            "columns": [],
+            "metrics": ["conversions"],
+            "grouping": ["sub_id_2"],
+            "filters": [],
+            "summary": False,
+            "limit": limit,
+            "offset": offset,
+        }
+
+        result = await self._request("reports.build", body)
+        rows = result.get("rows", [])
+
+        campaign_conversions: dict[str, int] = {}
+        for row in rows:
+            campaign_id = row.get("sub_id_2", "")
+            conversions = int(row.get("conversions", 0))
+
+            if not campaign_id or campaign_id == "{{campaign_id}}" or conversions == 0:
+                continue
+
+            campaign_conversions[campaign_id] = conversions
+
+        return campaign_conversions
+
+    async def get_all_conversions_by_campaign(
+        self,
+        interval: str = "today",
+        timezone: str = "Europe/Moscow",
+    ) -> dict[str, int]:
+        """Fetch all pages of conversions grouped by campaign_id (sub_id_2)."""
+        all_conversions: dict[str, int] = {}
+        offset = 0
+        limit = 500
+
+        while True:
+            batch = await self.get_conversions_by_campaign(
+                interval=interval,
+                timezone=timezone,
+                limit=limit,
+                offset=offset,
+            )
+            if not batch:
+                break
+            all_conversions.update(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
+
+        return all_conversions
