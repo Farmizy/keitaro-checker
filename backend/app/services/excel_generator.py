@@ -1,8 +1,12 @@
 """FB Ads Manager Bulk Upload Excel generator."""
 
+import zoneinfo
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from openpyxl import Workbook
+
+MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
 GEO_TO_LANGUAGE = {
     "PL": "Polish",
@@ -139,6 +143,13 @@ def _build_row(
     ad_num: int,
     languages: list[str],
 ) -> dict:
+    # Tomorrow at 04:00 AM Moscow time
+    tomorrow_4am = (
+        datetime.now(MOSCOW_TZ).replace(hour=4, minute=0, second=0, microsecond=0)
+        + timedelta(days=1)
+    )
+    start_time = tomorrow_4am.strftime("%m/%d/%Y %I:%M %p")
+
     row = {
         # Campaign level
         "Campaign Name": spec.campaign_name,
@@ -147,11 +158,13 @@ def _build_row(
         "Buying Type": "AUCTION",
         "Campaign Daily Budget": spec.daily_budget,
         "Campaign Bid Strategy": "Highest volume or value",
+        "Campaign Start Time": start_time,
         "Campaign Page ID": "",
         "New Objective": "Yes",
         # Ad Set level
         "Ad Set Run Status": "ACTIVE",
         "Ad Set Name": f"New Leads Ad Set{adset_suffix}",
+        "Ad Set Time Start": start_time,
         "Destination Type": "UNDEFINED",
         "Link Object ID": f"o:{spec.page_id}",
         "Optimized Conversion Tracking Pixels": f"tp:{spec.pixel_id}",
