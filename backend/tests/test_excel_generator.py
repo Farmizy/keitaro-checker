@@ -161,7 +161,7 @@ class TestGenerateFbExcel:
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
         col = headers.index("Dynamic Creative Ad Format") + 1
-        assert ws.cell(row=2, column=col).value == "Single Video"
+        assert ws.cell(row=2, column=col).value == "Automatic Format"
 
     def test_no_targeting_relaxation_column(self):
         """Targeting Relaxation removed — was causing FB import errors."""

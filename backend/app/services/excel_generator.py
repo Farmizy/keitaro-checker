@@ -1,4 +1,7 @@
-"""FB Ads Manager Bulk Upload Excel generator."""
+"""FB Ads Manager Bulk Upload Excel generator.
+
+Column names and order based on real FB Ads Manager export (2026-03-03).
+"""
 
 import zoneinfo
 from dataclasses import dataclass, field
@@ -33,7 +36,7 @@ ATTRIBUTION_SPEC = (
 # Ad set name suffixes for copies
 ADSET_SUFFIXES = ["", " - Copy", " - Copy 2", " - Copy 3", " - Copy 4"]
 
-# FB Ads Manager Bulk Upload columns (order matches real FB export)
+# FB Ads Manager Bulk Upload columns — order matches real FB export
 FB_COLUMNS = [
     # Campaign level
     "Campaign Name",
@@ -61,7 +64,6 @@ FB_COLUMNS = [
     "Custom Audiences",
     "Excluded Custom Audiences",
     "Advantage Audience",
-    "Individual Setting",
     "Age Range",
     "Targeting Optimization",
     "Beneficiary",
@@ -75,15 +77,18 @@ FB_COLUMNS = [
     "Ad Status",
     "Ad Name",
     "Dynamic Creative Ad Format",
-    "Creative Type",
-    "URL Tags",
-    "Instagram Account ID (New)",
-    "Call to Action",
     "Default Language",
     "Additional Language 1",
     "Additional Language 2",
     "Additional Language 3",
     "Additional Language 4",
+    "Title",
+    "Body",
+    "Display Link",
+    "Creative Type",
+    "URL Tags",
+    "Instagram Account ID (New)",
+    "Call to Action",
 ]
 
 
@@ -148,7 +153,10 @@ def _build_row(
         datetime.now(MOSCOW_TZ).replace(hour=4, minute=0, second=0, microsecond=0)
         + timedelta(days=1)
     )
-    start_time = tomorrow_4am.strftime("%m/%d/%Y %I:%M %p")
+    # Format: "03/04/2026 4:00:00 am" — matches real FB export format
+    hour_12 = tomorrow_4am.strftime("%I").lstrip("0")
+    am_pm = tomorrow_4am.strftime("%p").lower()
+    start_time = tomorrow_4am.strftime(f"%m/%d/%Y {hour_12}:%M:%S {am_pm}")
 
     row = {
         # Campaign level
@@ -159,7 +167,7 @@ def _build_row(
         "Campaign Daily Budget": spec.daily_budget,
         "Campaign Bid Strategy": "Highest volume or value",
         "Campaign Start Time": start_time,
-        "Campaign Page ID": f"o:{spec.page_id}",
+        "Campaign Page ID": "",
         "New Objective": "Yes",
         # Ad Set level
         "Ad Set Run Status": "ACTIVE",
@@ -177,7 +185,6 @@ def _build_row(
         "Custom Audiences": spec.custom_audiences,
         "Excluded Custom Audiences": spec.custom_audiences,
         "Advantage Audience": 1,
-        "Individual Setting": "age: On, gender: On",
         "Age Range": f"{spec.age_min}, {spec.age_max}",
         "Targeting Optimization": "expansion_all",
         "Beneficiary": spec.beneficiary,
@@ -191,13 +198,16 @@ def _build_row(
         "Ad Status": "ACTIVE",
         "Ad Name": str(ad_num),
         "Dynamic Creative Ad Format": "Automatic Format",
+        "Default Language": spec.default_language,
+        "Title": ".",
+        "Body": ".",
+        "Display Link": "",
         "Creative Type": "Link Page Post Ad",
         "URL Tags": spec.url_tags,
         "Instagram Account ID (New)": (
             f"x:{spec.instagram_id}" if spec.instagram_id else ""
         ),
         "Call to Action": "LEARN_MORE",
-        "Default Language": spec.default_language,
     }
 
     for i, lang in enumerate(languages):
