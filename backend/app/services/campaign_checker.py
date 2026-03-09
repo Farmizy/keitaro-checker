@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
-from app.services.panel_client import PanelClient, PanelCampaign
+from app.services.panel_client import PanelClient, PanelCampaign, TokenExpiredError
 from app.services.keitaro_client import KeitaroClient
 from app.services.database_service import DatabaseService
 from app.services.action_executor import ActionExecutor
@@ -117,6 +117,23 @@ class CampaignChecker:
                 f"Check complete: {campaigns_checked} checked, "
                 f"{actions_taken} actions, {errors_count} errors"
             )
+
+        except TokenExpiredError as e:
+            logger.error(f"Panel JWT expired, skipping check cycle: {e}")
+            self.db.update_check_run(run_id, {
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "campaigns_checked": campaigns_checked,
+                "actions_taken": actions_taken,
+                "errors_count": errors_count + 1,
+                "details": {"error": "Panel JWT expired"},
+            })
+            if self.notifier:
+                await self.notifier.send(
+                    "⚠️ <b>Panel JWT токен истёк!</b>\n\n"
+                    "Проверка кампаний пропущена.\n"
+                    "Обновите токен: POST /api/v1/settings/panel-jwt"
+                )
 
         except Exception as e:
             logger.error(f"Check run failed: {e}")

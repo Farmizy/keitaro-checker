@@ -9,9 +9,16 @@ from typing import Any
 
 import httpx
 from loguru import logger
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.config import settings
+
+
+def _retry_if_http_error_not_401(exc: BaseException) -> bool:
+    """Retry on HTTP errors except 401 (token expired — retrying won't help)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code != 401
+    return False
 
 
 @dataclass
@@ -47,6 +54,11 @@ class PanelPage:
     name: str
 
 
+class TokenExpiredError(Exception):
+    """Raised when Panel JWT token is expired (401)."""
+    pass
+
+
 class PanelClient:
     def __init__(
         self,
@@ -56,6 +68,11 @@ class PanelClient:
         self.base_url = (base_url or settings.panel_api_url).rstrip("/")
         self._jwt = jwt_token or settings.panel_jwt
         self._http = httpx.AsyncClient(timeout=30)
+
+    def update_jwt(self, new_token: str):
+        """Update JWT token at runtime without restart."""
+        self._jwt = new_token
+        logger.info("Panel JWT token updated")
 
     async def close(self):
         await self._http.aclose()
@@ -68,7 +85,14 @@ class PanelClient:
             "Referer": "https://panel.2kk.team/",
         }
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    def _check_auth(self, resp: httpx.Response) -> None:
+        """Raise TokenExpiredError on 401 instead of generic HTTPStatusError."""
+        if resp.status_code == 401:
+            raise TokenExpiredError(
+                f"Panel JWT expired: {resp.text[:200]}"
+            )
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception(_retry_if_http_error_not_401))
     async def get_campaigns(
         self,
         start_date: str,
@@ -91,6 +115,7 @@ class PanelClient:
                 "limit": limit,
             },
         )
+        self._check_auth(resp)
         resp.raise_for_status()
         data = resp.json()
 
@@ -166,7 +191,7 @@ class PanelClient:
 
         return all_campaigns
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception(_retry_if_http_error_not_401))
     async def get_accounts(
         self,
         start_date: str,
@@ -190,6 +215,7 @@ class PanelClient:
         )
         if resp.status_code != 200:
             logger.error(f"Panel API /accounts error: status={resp.status_code} body={resp.text[:500]}")
+        self._check_auth(resp)
         resp.raise_for_status()
         data = resp.json()
 
@@ -225,7 +251,7 @@ class PanelClient:
             for item in items
         ]
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception(_retry_if_http_error_not_401))
     async def set_budget(self, internal_id: int, daily_budget: float) -> bool:
         """Change campaign daily budget. Uses internal panel ID, not FB campaign ID."""
         resp = await self._http.post(
@@ -233,6 +259,7 @@ class PanelClient:
             headers=self._headers(),
             json={"dailyBudget": daily_budget},
         )
+        self._check_auth(resp)
         resp.raise_for_status()
         data = resp.json()
         success = data.get("success", False)
@@ -244,7 +271,7 @@ class PanelClient:
 
         return success
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception(_retry_if_http_error_not_401))
     async def update_campaign_status(
         self,
         campaign_ids: list[int],
@@ -259,11 +286,12 @@ class PanelClient:
                 "status": status,  # "PAUSED" or "ACTIVE"
             },
         )
+        self._check_auth(resp)
         resp.raise_for_status()
         logger.info(f"Panel: campaigns {campaign_ids} status -> {status}")
         return True
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception(_retry_if_http_error_not_401))
     async def get_account_pages(self, panel_account_id: int) -> list[PanelPage]:
         """Fetch pages for a specific account from Panel API."""
         from datetime import datetime
@@ -283,6 +311,7 @@ class PanelClient:
                 "limit": 100,
             },
         )
+        self._check_auth(resp)
         resp.raise_for_status()
         data = resp.json()
 

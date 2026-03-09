@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.api import accounts, campaigns, rules, logs, dashboard, scheduler, generator
+from app.api import settings as settings_api
 from app.config import settings
 from app.services.panel_client import PanelClient
 from app.services.keitaro_client import KeitaroClient
@@ -77,6 +78,7 @@ app.include_router(logs.router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(dashboard.router, prefix="/api/v1/dashboard", tags=["dashboard"])
 app.include_router(scheduler.router, prefix="/api/v1/scheduler", tags=["scheduler"])
 app.include_router(generator.router, prefix="/api/v1/generator", tags=["generator"])
+app.include_router(settings_api.router, prefix="/api/v1/settings", tags=["settings"])
 
 
 @app.get("/health")
