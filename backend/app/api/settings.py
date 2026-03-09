@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user
 from app.services.panel_client import PanelClient
 
 router = APIRouter()
@@ -22,7 +21,6 @@ def _get_panel(request: Request) -> PanelClient:
 async def update_panel_jwt(
     body: UpdateJwtRequest,
     request: Request,
-    _user=Depends(get_current_user),
 ):
     """Update Panel API JWT token at runtime without restart."""
     panel = _get_panel(request)
