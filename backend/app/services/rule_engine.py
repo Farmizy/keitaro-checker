@@ -33,11 +33,11 @@ class CampaignState:
 
 # Default stop thresholds: (min_spend, max_leads_to_stop)
 DEFAULT_STOP_THRESHOLDS: list[tuple[float, int]] = [
-    (8, 0),
-    (16, 1),
-    (24, 2),
-    (32, 3),
-    (40, 4),
+    (7, 0),
+    (15, 1),
+    (23, 2),
+    (31, 3),
+    (39, 4),
 ]
 
 # Default budget steps: (min_leads, target_budget) — checked top-down
@@ -47,7 +47,7 @@ DEFAULT_BUDGET_STEPS: list[tuple[int, float]] = [
     (2, 75),
 ]
 
-CPL_STOP_SPEND = 48.0
+CPL_STOP_SPEND = 47.0
 CPL_STOP_MAX = 10.0
 MANUAL_REVIEW_LEADS = 7
 COOLDOWN_HOURS = 1

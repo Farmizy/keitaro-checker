@@ -9,6 +9,7 @@ import {
   LogOut,
   X,
   PlusCircle,
+  Rocket,
 } from "lucide-react"
 import { useAuth } from "@/hooks/useAuth"
 import { cn } from "@/lib/utils"
@@ -20,6 +21,7 @@ const links = [
   { to: "/rules", icon: Scale, label: "Rules" },
   { to: "/logs", icon: ScrollText, label: "Logs" },
   { to: "/generator", icon: PlusCircle, label: "Generator" },
+  { to: "/auto-launcher", icon: Rocket, label: "Auto-Launcher" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ]
 

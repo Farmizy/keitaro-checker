@@ -184,3 +184,61 @@ export interface CampaignFormEntry {
   daily_budget: number
   creative_version: string
 }
+
+// --- Auto-Launcher ---
+
+export interface AutoLaunchSettings {
+  id: string
+  is_enabled: boolean
+  analysis_hour: number
+  analysis_minute: number
+  launch_hour: number
+  launch_minute: number
+  min_roi_threshold: number
+  starting_budget: number
+  new_campaign_max_activity_days: number
+  proven_min_activity_days: number
+  blacklist_zero_leads_days: number
+}
+
+export interface LaunchQueueItem {
+  id: string
+  campaign_id: string
+  fb_campaign_id: string
+  fb_campaign_name: string
+  fb_account_id: string
+  launch_type: "new" | "proven"
+  target_budget: number
+  analysis_data: Record<string, number>
+  status: "pending" | "approved" | "removed" | "launched" | "skipped" | "failed"
+  launch_date: string
+  created_at: string
+  launched_at: string | null
+  error_message: string | null
+}
+
+export interface BlacklistItem {
+  id: string
+  campaign_id: string
+  fb_campaign_id: string
+  fb_campaign_name: string
+  reason: string
+  blacklisted_at: string
+  blacklisted_by: "system" | "user"
+}
+
+export interface AutoLauncherStatus {
+  is_enabled: boolean
+  schedule: {
+    analysis_next_run: string | null
+    launch_next_run: string | null
+  }
+  today_queue: {
+    total: number
+    pending: number
+    launched: number
+    skipped: number
+    failed: number
+    removed: number
+  }
+}

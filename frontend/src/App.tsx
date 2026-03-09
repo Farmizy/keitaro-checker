@@ -10,6 +10,7 @@ import RulesPage from "@/pages/RulesPage"
 import LogsPage from "@/pages/LogsPage"
 import SettingsPage from "@/pages/SettingsPage"
 import GeneratorPage from "@/pages/GeneratorPage"
+import AutoLauncherPage from "@/pages/AutoLauncherPage"
 import type { ReactNode } from "react"
 
 const queryClient = new QueryClient({
@@ -46,6 +47,7 @@ export default function App() {
               <Route path="logs" element={<LogsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="generator" element={<GeneratorPage />} />
+              <Route path="auto-launcher" element={<AutoLauncherPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

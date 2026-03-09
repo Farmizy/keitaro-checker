@@ -269,3 +269,90 @@ class DatabaseService:
             .execute()
         )
         return response.data[0] if response.data else None
+
+    # --- Auto-Launch Settings ---
+
+    def get_auto_launch_settings(self) -> Optional[dict]:
+        response = self.client.table("auto_launch_settings").select("*").limit(1).execute()
+        return response.data[0] if response.data else None
+
+    def update_auto_launch_settings(self, data: dict[str, Any]) -> Optional[dict]:
+        current = self.get_auto_launch_settings()
+        if not current:
+            response = self.client.table("auto_launch_settings").insert(data).execute()
+            return response.data[0] if response.data else None
+        data["updated_at"] = "now()"
+        response = (
+            self.client.table("auto_launch_settings")
+            .update(data)
+            .eq("id", current["id"])
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    # --- Auto-Launch Queue ---
+
+    def add_to_launch_queue(self, data: dict[str, Any]) -> dict:
+        response = self.client.table("auto_launch_queue").upsert(
+            data, on_conflict="campaign_id,launch_date"
+        ).execute()
+        return response.data[0]
+
+    def get_launch_queue(
+        self,
+        launch_date: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[dict]:
+        query = self.client.table("auto_launch_queue").select("*")
+        if launch_date:
+            query = query.eq("launch_date", launch_date)
+        if status:
+            query = query.eq("status", status)
+        query = query.order("created_at")
+        return query.execute().data
+
+    def update_launch_queue_item(self, item_id: str, data: dict[str, Any]) -> Optional[dict]:
+        response = (
+            self.client.table("auto_launch_queue")
+            .update(data)
+            .eq("id", item_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def clear_old_launch_queue(self, before_date: str) -> None:
+        self.client.table("auto_launch_queue") \
+            .delete() \
+            .lt("launch_date", before_date) \
+            .in_("status", ["launched", "skipped", "failed", "removed"]) \
+            .execute()
+
+    # --- Auto-Launch Blacklist ---
+
+    def get_blacklist(self) -> list[dict]:
+        return (
+            self.client.table("auto_launch_blacklist")
+            .select("*")
+            .order("blacklisted_at", desc=True)
+            .execute()
+            .data
+        )
+
+    def get_blacklisted_campaign_ids(self) -> set[str]:
+        response = self.client.table("auto_launch_blacklist").select("campaign_id").execute()
+        return {row["campaign_id"] for row in response.data}
+
+    def add_to_blacklist(self, data: dict[str, Any]) -> dict:
+        response = self.client.table("auto_launch_blacklist").upsert(
+            data, on_conflict="campaign_id"
+        ).execute()
+        return response.data[0]
+
+    def remove_from_blacklist(self, campaign_id: str) -> bool:
+        response = (
+            self.client.table("auto_launch_blacklist")
+            .delete()
+            .eq("campaign_id", campaign_id)
+            .execute()
+        )
+        return len(response.data) > 0

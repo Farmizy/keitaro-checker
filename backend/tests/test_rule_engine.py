@@ -24,24 +24,24 @@ def _state(spend=0.0, leads=0, budget=30.0, last_change=None):
 
 
 class TestStopRules:
-    def test_8_spend_0_leads(self):
-        result = evaluate(_state(spend=8, leads=0), NOW)
+    def test_7_spend_0_leads(self):
+        result = evaluate(_state(spend=7, leads=0), NOW)
         assert result.type == ActionType.STOP
 
-    def test_16_spend_1_lead(self):
-        result = evaluate(_state(spend=16, leads=1), NOW)
+    def test_15_spend_1_lead(self):
+        result = evaluate(_state(spend=15, leads=1), NOW)
         assert result.type == ActionType.STOP
 
-    def test_24_spend_2_leads(self):
-        result = evaluate(_state(spend=24, leads=2), NOW)
+    def test_23_spend_2_leads(self):
+        result = evaluate(_state(spend=23, leads=2), NOW)
         assert result.type == ActionType.STOP
 
-    def test_32_spend_3_leads(self):
-        result = evaluate(_state(spend=32, leads=3), NOW)
+    def test_31_spend_3_leads(self):
+        result = evaluate(_state(spend=31, leads=3), NOW)
         assert result.type == ActionType.STOP
 
-    def test_40_spend_4_leads(self):
-        result = evaluate(_state(spend=40, leads=4), NOW)
+    def test_39_spend_4_leads(self):
+        result = evaluate(_state(spend=39, leads=4), NOW)
         assert result.type == ActionType.STOP
 
     def test_cpl_above_10(self):
@@ -62,16 +62,16 @@ class TestStopRules:
 
     def test_stop_works_during_cooldown(self):
         last_change = NOW - timedelta(minutes=30)
-        result = evaluate(_state(spend=8, leads=0, last_change=last_change), NOW)
+        result = evaluate(_state(spend=7, leads=0, last_change=last_change), NOW)
         assert result.type == ActionType.STOP
 
     def test_no_stop_below_threshold(self):
-        result = evaluate(_state(spend=7.99, leads=0), NOW)
+        result = evaluate(_state(spend=6.99, leads=0), NOW)
         assert result.type != ActionType.STOP
 
     def test_higher_threshold_applies(self):
-        # spend=$32 with 2 leads: (24,2) triggers because 32>=24 and 2<=2
-        result = evaluate(_state(spend=32, leads=2), NOW)
+        # spend=$31 with 2 leads: (23,2) triggers because 31>=23 and 2<=2
+        result = evaluate(_state(spend=31, leads=2), NOW)
         assert result.type == ActionType.STOP
 
 
@@ -97,38 +97,38 @@ class TestManualReview:
 
 class TestBudgetIncrease:
     def test_2_leads_budget_to_75(self):
-        result = evaluate(_state(spend=16, leads=2, budget=30), NOW)
+        result = evaluate(_state(spend=15, leads=2, budget=30), NOW)
         assert result.type == ActionType.SET_BUDGET
         assert result.target_budget == 75
 
     def test_4_leads_budget_to_150(self):
-        result = evaluate(_state(spend=32, leads=4, budget=75), NOW)
+        result = evaluate(_state(spend=31, leads=4, budget=75), NOW)
         assert result.type == ActionType.SET_BUDGET
         assert result.target_budget == 150
 
     def test_6_leads_budget_to_250(self):
-        result = evaluate(_state(spend=48, leads=6, budget=150), NOW)
+        result = evaluate(_state(spend=47, leads=6, budget=150), NOW)
         assert result.type == ActionType.SET_BUDGET
         assert result.target_budget == 250
 
     def test_never_lower_budget(self):
         # 2 leads → target $75, but budget already $100 → skip
-        result = evaluate(_state(spend=16, leads=2, budget=100), NOW)
+        result = evaluate(_state(spend=15, leads=2, budget=100), NOW)
         assert result.type == ActionType.WAIT
 
     def test_manual_budget_higher_than_all_steps(self):
         # Budget manually set to $300, leads=6 → target $250 < $300 → skip
-        result = evaluate(_state(spend=48, leads=6, budget=300), NOW)
+        result = evaluate(_state(spend=47, leads=6, budget=300), NOW)
         assert result.type != ActionType.SET_BUDGET
 
     def test_budget_already_at_target(self):
         # budget == target → current_budget < target is False → skip
-        result = evaluate(_state(spend=16, leads=2, budget=75), NOW)
+        result = evaluate(_state(spend=15, leads=2, budget=75), NOW)
         assert result.type == ActionType.WAIT
 
     def test_skips_to_higher_step(self):
         # 4 leads with budget=30 → should go to $150 (not $75)
-        result = evaluate(_state(spend=32, leads=4, budget=30), NOW)
+        result = evaluate(_state(spend=31, leads=4, budget=30), NOW)
         assert result.type == ActionType.SET_BUDGET
         assert result.target_budget == 150
 
@@ -145,24 +145,24 @@ class TestBudgetIncrease:
 class TestCooldown:
     def test_blocks_budget_increase(self):
         last_change = NOW - timedelta(minutes=30)
-        result = evaluate(_state(spend=16, leads=2, budget=30, last_change=last_change), NOW)
+        result = evaluate(_state(spend=15, leads=2, budget=30, last_change=last_change), NOW)
         assert result.type == ActionType.WAIT
         assert "cooldown" in result.reason
 
     def test_expired_allows_budget(self):
         last_change = NOW - timedelta(hours=2)
-        result = evaluate(_state(spend=16, leads=2, budget=30, last_change=last_change), NOW)
+        result = evaluate(_state(spend=15, leads=2, budget=30, last_change=last_change), NOW)
         assert result.type == ActionType.SET_BUDGET
         assert result.target_budget == 75
 
     def test_exactly_1_hour_allows(self):
         last_change = NOW - timedelta(hours=1)
-        result = evaluate(_state(spend=16, leads=2, budget=30, last_change=last_change), NOW)
+        result = evaluate(_state(spend=15, leads=2, budget=30, last_change=last_change), NOW)
         assert result.type == ActionType.SET_BUDGET
 
     def test_does_not_block_stop(self):
         last_change = NOW - timedelta(minutes=30)
-        result = evaluate(_state(spend=8, leads=0, last_change=last_change), NOW)
+        result = evaluate(_state(spend=7, leads=0, last_change=last_change), NOW)
         assert result.type == ActionType.STOP
 
     def test_does_not_block_manual_review(self):
@@ -179,7 +179,7 @@ class TestWait:
         result = evaluate(_state(spend=3, leads=0), NOW)
         assert result.type == ActionType.WAIT
 
-    def test_1_lead_under_16_spend(self):
+    def test_1_lead_under_15_spend(self):
         result = evaluate(_state(spend=10, leads=1), NOW)
         assert result.type == ActionType.WAIT
 
@@ -193,20 +193,20 @@ class TestWait:
 
 class TestEdgeCases:
     def test_exact_spend_threshold(self):
-        result = evaluate(_state(spend=8.0, leads=0), NOW)
+        result = evaluate(_state(spend=7.0, leads=0), NOW)
         assert result.type == ActionType.STOP
 
     def test_just_below_stop_spend(self):
-        result = evaluate(_state(spend=15.99, leads=1), NOW)
+        result = evaluate(_state(spend=14.99, leads=1), NOW)
         assert result.type != ActionType.STOP
 
     def test_stop_priority_over_budget(self):
-        # spend=$24, leads=2 → STOP (even though 2 leads could trigger budget)
-        result = evaluate(_state(spend=24, leads=2, budget=30), NOW)
+        # spend=$23, leads=2 → STOP (even though 2 leads could trigger budget)
+        result = evaluate(_state(spend=23, leads=2, budget=30), NOW)
         assert result.type == ActionType.STOP
 
     def test_action_has_reason(self):
-        result = evaluate(_state(spend=8, leads=0), NOW)
+        result = evaluate(_state(spend=7, leads=0), NOW)
         assert result.reason != ""
 
     def test_custom_thresholds(self):

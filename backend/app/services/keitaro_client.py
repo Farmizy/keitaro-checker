@@ -361,6 +361,93 @@ class KeitaroClient:
 
         return all_conversions
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10),
+           retry=retry_if_exception_type(httpx.HTTPStatusError))
+    async def get_campaign_stats_by_period(
+        self,
+        date_from: str,
+        date_to: str,
+        timezone: str = "Europe/Moscow",
+        limit: int = 500,
+        offset: int = 0,
+    ) -> dict[str, dict]:
+        """Get campaign stats (conversions, roi, cost) for a date range.
+
+        Args:
+            date_from: Start date "YYYY-MM-DD"
+            date_to: End date "YYYY-MM-DD"
+
+        Returns:
+            Dict mapping campaign_id -> {conversions: int, roi: float, cost: float}
+        """
+        await self.ensure_authenticated()
+        body = {
+            "range": {
+                "from": date_from,
+                "to": date_to,
+                "timezone": timezone,
+            },
+            "columns": [],
+            "metrics": ["conversions", "roi_confirmed", "cost"],
+            "grouping": ["sub_id_2"],
+            "filters": [],
+            "summary": False,
+            "limit": limit,
+            "offset": offset,
+        }
+
+        result = await self._request("reports.build", body)
+        rows = result.get("rows", [])
+
+        campaign_stats: dict[str, dict] = {}
+        for row in rows:
+            campaign_id = row.get("sub_id_2", "")
+            if not campaign_id or campaign_id == "{{campaign_id}}":
+                continue
+
+            conversions = int(row.get("conversions", 0))
+            roi = float(row.get("roi_confirmed", 0))
+            cost = float(row.get("cost", 0))
+
+            if cost == 0 and conversions == 0:
+                continue
+
+            campaign_stats[campaign_id] = {
+                "conversions": conversions,
+                "roi": roi,
+                "cost": cost,
+            }
+
+        return campaign_stats
+
+    async def get_all_campaign_stats_by_period(
+        self,
+        date_from: str,
+        date_to: str,
+        timezone: str = "Europe/Moscow",
+    ) -> dict[str, dict]:
+        """Fetch all pages of campaign stats for a date range."""
+        all_stats: dict[str, dict] = {}
+        offset = 0
+        limit = 500
+
+        while True:
+            batch = await self.get_campaign_stats_by_period(
+                date_from=date_from,
+                date_to=date_to,
+                timezone=timezone,
+                limit=limit,
+                offset=offset,
+            )
+            if not batch:
+                break
+            all_stats.update(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
+
+        return all_stats
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
     async def get_conversions_by_campaign(
         self,
