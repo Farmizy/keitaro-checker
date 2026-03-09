@@ -55,6 +55,17 @@ ALTER TABLE auto_launch_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auto_launch_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auto_launch_blacklist ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow all for authenticated" ON auto_launch_settings FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Allow all for authenticated" ON auto_launch_queue FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Allow all for authenticated" ON auto_launch_blacklist FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Anon can select auto_launch_settings" ON auto_launch_settings FOR SELECT USING (true);
+CREATE POLICY "Anon can insert auto_launch_settings" ON auto_launch_settings FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anon can update auto_launch_settings" ON auto_launch_settings FOR UPDATE USING (true);
+CREATE POLICY "Anon can delete auto_launch_settings" ON auto_launch_settings FOR DELETE USING (true);
+
+CREATE POLICY "Anon can select auto_launch_queue" ON auto_launch_queue FOR SELECT USING (true);
+CREATE POLICY "Anon can insert auto_launch_queue" ON auto_launch_queue FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anon can update auto_launch_queue" ON auto_launch_queue FOR UPDATE USING (true);
+CREATE POLICY "Anon can delete auto_launch_queue" ON auto_launch_queue FOR DELETE USING (true);
+
+CREATE POLICY "Anon can select auto_launch_blacklist" ON auto_launch_blacklist FOR SELECT USING (true);
+CREATE POLICY "Anon can insert auto_launch_blacklist" ON auto_launch_blacklist FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anon can update auto_launch_blacklist" ON auto_launch_blacklist FOR UPDATE USING (true);
+CREATE POLICY "Anon can delete auto_launch_blacklist" ON auto_launch_blacklist FOR DELETE USING (true);
