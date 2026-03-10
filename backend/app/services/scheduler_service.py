@@ -1,9 +1,13 @@
 """APScheduler wrapper for campaign check cycle and auto-launcher."""
 
+import zoneinfo
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
+
+MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
 from app.services.campaign_checker import CampaignChecker
 
@@ -22,7 +26,7 @@ class SchedulerService:
         self.checker = checker
         self.interval_minutes = interval_minutes
         self.auto_launcher = auto_launcher
-        self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+        self.scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
         self._paused = False
 
     def start(self):
