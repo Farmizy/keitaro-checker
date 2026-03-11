@@ -122,25 +122,44 @@ class AutoLauncher:
             queue_items = []
             blacklisted_count = 0
 
+            logger.info(
+                f"Auto-launcher: {len(panel_campaigns)} panel campaigns, "
+                f"{len(db_campaigns)} DB campaigns, "
+                f"{len(stats_2d)} in stats_2d, {len(stats_7d)} in stats_7d, "
+                f"{len(blacklisted_ids)} blacklisted"
+            )
+
+            skipped_reasons: dict[str, int] = {
+                "not_in_db": 0, "not_managed": 0, "blacklisted": 0,
+                "active": 0, "error_account": 0, "no_keitaro_data": 0,
+                "classify_none": 0,
+            }
+
             for pc in panel_campaigns:
                 db_camp = db_campaigns.get(pc.campaign_id)
                 if not db_camp:
+                    skipped_reasons["not_in_db"] += 1
                     continue
 
                 # Skip non-managed
                 if not db_camp.get("is_managed", True):
+                    skipped_reasons["not_managed"] += 1
                     continue
 
                 # Skip blacklisted
                 if db_camp["id"] in blacklisted_ids:
+                    skipped_reasons["blacklisted"] += 1
                     continue
 
                 # Only stopped/paused campaigns
                 if pc.effective_status == "ACTIVE":
+                    skipped_reasons["active"] += 1
                     continue
 
                 # Skip error accounts
                 if pc.account_name not in active_account_names:
+                    skipped_reasons["error_account"] += 1
+                    logger.debug(f"  skip error_account: {pc.name} (account={pc.account_name})")
                     continue
 
                 # Get Keitaro data
@@ -149,6 +168,8 @@ class AutoLauncher:
 
                 # Not in 2-day data → skip (recency filter)
                 if k2d["cost"] == 0 and pc.campaign_id not in stats_2d:
+                    skipped_reasons["no_keitaro_data"] += 1
+                    logger.debug(f"  skip no_keitaro: {pc.name} (fb_id={pc.campaign_id})")
                     continue
 
                 launch_type = self.classify_campaign(
@@ -159,6 +180,16 @@ class AutoLauncher:
                     settings=settings,
                 )
 
+                logger.debug(
+                    f"  classify: {pc.name} → {launch_type} "
+                    f"(spend_2d={k2d['cost']}, spend_7d={k7d['cost']}, "
+                    f"leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
+                )
+
+                if launch_type is None:
+                    skipped_reasons["classify_none"] += 1
+                    continue
+
                 if launch_type == "blacklist":
                     self.db.add_to_blacklist({
                         "campaign_id": db_camp["id"],
@@ -167,9 +198,6 @@ class AutoLauncher:
                         "reason": "zero_leads_2d",
                     })
                     blacklisted_count += 1
-                    continue
-
-                if launch_type is None:
                     continue
 
                 queue_items.append({
@@ -189,6 +217,8 @@ class AutoLauncher:
                     "status": "pending",
                     "launch_date": str(tomorrow),
                 })
+
+            logger.info(f"Auto-launcher skip reasons: {skipped_reasons}")
 
             # 6. Write queue to DB
             for item in queue_items:
