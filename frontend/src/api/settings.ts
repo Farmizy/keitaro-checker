@@ -26,3 +26,18 @@ export async function updateSettings(payload: UserSettingsUpdate): Promise<UserS
   const { data } = await api.put("/settings/", payload)
   return data
 }
+
+export async function testKeitaro(): Promise<{ status: string; message: string }> {
+  const { data } = await api.post("/settings/test/keitaro")
+  return data
+}
+
+export async function testPanel(): Promise<{ status: string; message: string }> {
+  const { data } = await api.post("/settings/test/panel")
+  return data
+}
+
+export async function testTelegram(): Promise<{ status: string; message: string }> {
+  const { data } = await api.post("/settings/test/telegram")
+  return data
+}

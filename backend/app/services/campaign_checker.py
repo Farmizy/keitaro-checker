@@ -19,7 +19,7 @@ from app.services.panel_client import PanelClient, PanelCampaign, TokenExpiredEr
 from app.services.keitaro_client import KeitaroClient
 from app.services.database_service import DatabaseService
 from app.services.action_executor import ActionExecutor
-from app.services.rule_engine import evaluate, CampaignState, ActionType
+from app.services.rule_engine import evaluate, parse_db_rules, CampaignState, ActionType
 from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
@@ -116,12 +116,23 @@ class CampaignChecker:
             # 3. Fetch conversions from Keitaro (grouped by campaign_id via sub_id_2)
             logger.info("Fetching conversions from Keitaro...")
             keitaro_conversions: dict[str, int] = {}
+            keitaro_available = True
             try:
                 await keitaro.ensure_authenticated()
                 keitaro_conversions = await keitaro.get_all_conversions_by_campaign()
                 logger.info(f"Got conversions for {len(keitaro_conversions)} campaign IDs from Keitaro")
             except Exception as e:
+                keitaro_available = False
                 logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
+                if notifier:
+                    try:
+                        await notifier.send(
+                            "⚠️ <b>Keitaro недоступен</b>\n\n"
+                            f"Ошибка: {e}\n"
+                            "Проверка использует лиды из Panel API как fallback."
+                        )
+                    except Exception:
+                        pass
 
             # 4. Build account mappings (prefer panel_account_id, fallback to name)
             account_by_panel_id = {
@@ -131,13 +142,22 @@ class CampaignChecker:
             }
             account_by_name = {acc["name"]: acc for acc in db_accounts}
 
+            # 4b. Load user's rule set from DB
+            rule_kwargs = {}
+            rule_set = db.get_default_rule_set()
+            if rule_set and rule_set.get("rule_steps"):
+                rule_kwargs = parse_db_rules(rule_set["rule_steps"])
+                logger.info(f"Loaded {len(rule_set['rule_steps'])} rule steps from DB")
+            else:
+                logger.info("No custom rules found, using defaults")
+
             # 5. Process each campaign
             for pc in panel_campaigns:
                 try:
                     result = await self._process_campaign(
                         db, executor, notifier,
                         pc, account_by_panel_id, account_by_name,
-                        keitaro_conversions, now,
+                        keitaro_conversions, now, rule_kwargs,
                     )
                     if result == "checked":
                         campaigns_checked += 1
@@ -154,6 +174,7 @@ class CampaignChecker:
                 "campaigns_checked": campaigns_checked,
                 "actions_taken": actions_taken,
                 "errors_count": errors_count,
+                "details": {"keitaro_available": keitaro_available},
             })
 
             logger.info(
@@ -200,6 +221,7 @@ class CampaignChecker:
         account_by_name: dict,
         keitaro_conversions: dict[str, int],
         now: datetime,
+        rule_kwargs: dict | None = None,
     ) -> str:
         """Process a single campaign. Returns 'skipped', 'checked', or 'action'."""
 
@@ -255,7 +277,7 @@ class CampaignChecker:
             link_clicks=pc.link_clicks,
         )
 
-        action = evaluate(state, now)
+        action = evaluate(state, now, **(rule_kwargs or {}))
 
         if action.type == ActionType.WAIT:
             return "checked"

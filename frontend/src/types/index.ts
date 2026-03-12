@@ -112,6 +112,12 @@ export interface CheckRun {
   details: Record<string, unknown>
 }
 
+export interface DashboardAlert {
+  type: "error" | "warning" | "info"
+  key: string
+  message: string
+}
+
 export interface DashboardStats {
   total_spend: number
   total_leads: number
@@ -124,6 +130,7 @@ export interface DashboardStats {
   accounts_active: number
   recent_actions: ActionLog[]
   recent_runs: CheckRun[]
+  alerts: DashboardAlert[]
 }
 
 export interface SchedulerStatus {

@@ -1,12 +1,21 @@
-import { DollarSign, Users, Megaphone, TrendingUp, AlertTriangle, Pause } from "lucide-react"
+import { DollarSign, Users, Megaphone, TrendingUp, AlertTriangle, Pause, Info, AlertCircle, Settings } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useDashboardStats } from "@/hooks/useDashboard"
 import { formatCurrency, formatDate } from "@/lib/utils"
+import { useNavigate } from "react-router-dom"
+import type { DashboardAlert } from "@/types"
+
+const alertStyles: Record<DashboardAlert["type"], { bg: string; border: string; icon: typeof AlertCircle }> = {
+  error: { bg: "bg-red-50 dark:bg-red-950/30", border: "border-red-200 dark:border-red-800", icon: AlertCircle },
+  warning: { bg: "bg-yellow-50 dark:bg-yellow-950/30", border: "border-yellow-200 dark:border-yellow-800", icon: AlertTriangle },
+  info: { bg: "bg-blue-50 dark:bg-blue-950/30", border: "border-blue-200 dark:border-blue-800", icon: Info },
+}
 
 export default function DashboardPage() {
   const { data: stats, isLoading } = useDashboardStats()
+  const navigate = useNavigate()
 
   if (isLoading || !stats) {
     return <div className="text-muted-foreground">Loading...</div>
@@ -26,6 +35,27 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Dashboard</h1>
+
+      {stats.alerts?.length > 0 && (
+        <div className="space-y-2">
+          {stats.alerts.map((alert) => {
+            const style = alertStyles[alert.type]
+            const Icon = style.icon
+            const isSettingsAlert = alert.key.includes("configured") || alert.key === "jwt_expired"
+            return (
+              <div
+                key={alert.key}
+                className={`flex items-center gap-3 rounded-lg border p-3 ${style.bg} ${style.border} ${isSettingsAlert ? "cursor-pointer hover:opacity-80" : ""}`}
+                onClick={isSettingsAlert ? () => navigate("/settings") : undefined}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="text-sm">{alert.message}</span>
+                {isSettingsAlert && <Settings className="ml-auto h-3.5 w-3.5 shrink-0 opacity-50" />}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map(({ label, value, icon: Icon }) => (

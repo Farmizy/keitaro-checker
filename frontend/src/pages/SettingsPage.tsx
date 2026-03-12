@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useSchedulerStatus } from "@/hooks/useScheduler"
-import { getSettings, updateSettings, type UserSettingsUpdate } from "@/api/settings"
+import { getSettings, updateSettings, testKeitaro, testPanel, testTelegram, type UserSettingsUpdate } from "@/api/settings"
 
 function StatusBadge({ configured }: { configured: boolean }) {
   return configured ? (
@@ -35,6 +35,38 @@ function SettingsField({ label, description, value, onChange, placeholder, type 
         placeholder={placeholder}
       />
       <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  )
+}
+
+function TestButton({ testFn, label }: { testFn: () => Promise<{ status: string; message: string }>; label: string }) {
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  async function handleTest() {
+    setLoading(true)
+    setResult(null)
+    try {
+      const res = await testFn()
+      setResult({ ok: true, msg: res.message })
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || (e as Error).message
+      setResult({ ok: false, msg })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <Button variant="outline" size="sm" onClick={handleTest} disabled={loading}>
+        {loading ? "Проверка..." : label}
+      </Button>
+      {result && (
+        <span className={`text-xs ${result.ok ? "text-green-600" : "text-destructive"}`}>
+          {result.msg}
+        </span>
+      )}
     </div>
   )
 }
@@ -131,6 +163,9 @@ export default function SettingsPage() {
             onChange={set("keitaro_password")}
             type="password"
           />
+          {settings?.keitaro_configured && (
+            <TestButton testFn={testKeitaro} label="Проверить Keitaro" />
+          )}
         </CardContent>
       </Card>
 
@@ -154,6 +189,9 @@ export default function SettingsPage() {
             onChange={set("panel_jwt")}
             type="password"
           />
+          {settings?.panel_configured && (
+            <TestButton testFn={testPanel} label="Проверить Panel" />
+          )}
         </CardContent>
       </Card>
 
@@ -175,6 +213,9 @@ export default function SettingsPage() {
             value={form.telegram_chat_id ?? ""}
             onChange={set("telegram_chat_id")}
           />
+          {settings?.telegram_configured && (
+            <TestButton testFn={testTelegram} label="Проверить Telegram" />
+          )}
         </CardContent>
       </Card>
 

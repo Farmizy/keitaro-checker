@@ -56,6 +56,58 @@ MANUAL_REVIEW_LEADS = 7
 COOLDOWN_HOURS = 1
 
 
+def parse_db_rules(steps: list[dict]) -> dict:
+    """Convert DB rule_steps rows into evaluate() keyword arguments.
+
+    Returns dict with keys matching evaluate() params:
+    stop_thresholds, budget_steps, cpl_stop_spend, cpl_stop_max,
+    manual_review_leads.
+    """
+    stop_thresholds: list[tuple[float, int]] = []
+    budget_steps: list[tuple[int, float]] = []
+    cpl_stop_spend = CPL_STOP_SPEND
+    cpl_stop_max = CPL_STOP_MAX
+    manual_review_leads = MANUAL_REVIEW_LEADS
+
+    for step in steps:
+        action = step.get("action", "")
+        spend = float(step["spend_threshold"]) if step.get("spend_threshold") else None
+        leads_max = step.get("leads_max")
+        leads_min = step.get("leads_min")
+        max_cpl = float(step["max_cpl"]) if step.get("max_cpl") else None
+        new_budget = float(step["new_budget"]) if step.get("new_budget") else None
+
+        if action == "campaign_stop":
+            if spend is not None and leads_max is not None:
+                stop_thresholds.append((spend, int(leads_max)))
+            elif spend is not None and max_cpl is not None:
+                # CPL-based stop (e.g. spend >= $48, CPL > $10)
+                cpl_stop_spend = spend
+                cpl_stop_max = max_cpl
+
+        elif action == "budget_increase":
+            if leads_min is not None and new_budget is not None:
+                budget_steps.append((int(leads_min), new_budget))
+
+        elif action == "manual_review_needed":
+            if leads_min is not None:
+                manual_review_leads = int(leads_min)
+
+    # Sort: stop thresholds ascending by spend, budget steps descending by leads
+    stop_thresholds.sort(key=lambda x: x[0])
+    budget_steps.sort(key=lambda x: x[0], reverse=True)
+
+    result = {}
+    if stop_thresholds:
+        result["stop_thresholds"] = stop_thresholds
+    if budget_steps:
+        result["budget_steps"] = budget_steps
+    result["cpl_stop_spend"] = cpl_stop_spend
+    result["cpl_stop_max"] = cpl_stop_max
+    result["manual_review_leads"] = manual_review_leads
+    return result
+
+
 def evaluate(
     state: CampaignState,
     now: datetime,

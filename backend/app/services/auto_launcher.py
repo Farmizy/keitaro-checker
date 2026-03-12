@@ -4,6 +4,7 @@ Analyzes campaigns at 23:00 MSK, launches best ones at 04:00 MSK.
 Multi-tenant: iterates over all users with configured credentials.
 """
 
+import asyncio
 import zoneinfo
 from datetime import datetime, timedelta
 from loguru import logger
@@ -34,12 +35,8 @@ class AutoLauncher:
         """Pure classification logic. Returns 'new', 'proven', 'blacklist', or None."""
         min_roi = float(settings.get("min_roi_threshold", 0))
 
-        # No activity at all
-        if spend_2d == 0:
-            return None
-
         # Determine if campaign is new (1-2 days) or established
-        is_new = spend_7d <= 0 or (spend_7d / spend_2d) < NEW_CAMPAIGN_SPEND_RATIO
+        is_new = spend_7d <= 0 or spend_2d <= 0 or (spend_7d / spend_2d) < NEW_CAMPAIGN_SPEND_RATIO
 
         if is_new:
             # New campaign with leads and positive ROI → proven
@@ -370,10 +367,73 @@ class AutoLauncher:
                         skipped += 1
                         continue
 
-                    # Set budget first, then resume
+                    # Set budget first, then resume (with retry)
                     target_budget = float(item.get("target_budget", 30))
-                    await panel.set_budget(pc.internal_id, target_budget)
-                    await panel.resume_campaign(pc.internal_id)
+                    budget_set = False
+                    resumed = False
+
+                    # Retry set_budget up to 3 attempts (1 + 2 retries)
+                    for attempt in range(3):
+                        try:
+                            await panel.set_budget(pc.internal_id, target_budget)
+                            budget_set = True
+                            break
+                        except Exception as e:
+                            logger.warning(
+                                f"set_budget attempt {attempt + 1}/3 failed for "
+                                f"{item['fb_campaign_name']}: {e}"
+                            )
+                            if attempt < 2:
+                                await asyncio.sleep(2)
+
+                    if not budget_set:
+                        raise RuntimeError(
+                            f"set_budget failed after 3 attempts for {item['fb_campaign_name']}"
+                        )
+
+                    # Retry resume_campaign up to 3 attempts (1 + 2 retries)
+                    for attempt in range(3):
+                        try:
+                            await panel.resume_campaign(pc.internal_id)
+                            resumed = True
+                            break
+                        except Exception as e:
+                            logger.warning(
+                                f"resume_campaign attempt {attempt + 1}/3 failed for "
+                                f"{item['fb_campaign_name']}: {e}"
+                            )
+                            if attempt < 2:
+                                await asyncio.sleep(2)
+
+                    if not resumed:
+                        # Budget was set but resume failed — log partial state
+                        logger.error(
+                            f"PARTIAL STATE: budget set to ${target_budget} but resume "
+                            f"failed for {item['fb_campaign_name']} (panel_id={pc.internal_id})"
+                        )
+                        db.update_launch_queue_item(item["id"], {
+                            "status": "failed",
+                            "error_message": (
+                                f"Partial state: budget set to ${target_budget} "
+                                f"but resume_campaign failed after 3 attempts"
+                            ),
+                        })
+                        db.create_action_log({
+                            "campaign_id": str(item["campaign_id"]),
+                            "fb_account_id": str(item["fb_account_id"]),
+                            "action_type": "auto_launch",
+                            "details": {
+                                "launch_type": item["launch_type"],
+                                "target_budget": target_budget,
+                                "partial_state": True,
+                                "budget_set": True,
+                                "resumed": False,
+                                "analysis_data": item.get("analysis_data", {}),
+                            },
+                            "success": False,
+                        })
+                        failed += 1
+                        continue
 
                     # Update queue
                     db.update_launch_queue_item(item["id"], {
