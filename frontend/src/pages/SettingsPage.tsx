@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useSchedulerStatus } from "@/hooks/useScheduler"
-import { getSettings, updateSettings, type UserSettings, type UserSettingsUpdate } from "@/api/settings"
+import { getSettings, updateSettings, type UserSettingsUpdate } from "@/api/settings"
 
 function StatusBadge({ configured }: { configured: boolean }) {
   return configured ? (
