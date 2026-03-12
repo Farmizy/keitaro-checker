@@ -31,7 +31,7 @@ interface Props {
 }
 
 export function Sidebar({ open, onClose }: Props) {
-  const { signOut } = useAuth()
+  const { user, signOut } = useAuth()
 
   return (
     <>
@@ -73,7 +73,12 @@ export function Sidebar({ open, onClose }: Props) {
           ))}
         </nav>
 
-        <div className="border-t border-sidebar-border p-3">
+        <div className="border-t border-sidebar-border p-3 space-y-1">
+          {user?.email && (
+            <div className="px-3 py-1.5 text-xs text-muted-foreground truncate">
+              {user.email}
+            </div>
+          )}
           <button
             onClick={() => signOut()}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground cursor-pointer"

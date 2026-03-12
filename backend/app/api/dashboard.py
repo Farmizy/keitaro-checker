@@ -1,19 +1,14 @@
 from fastapi import APIRouter, Depends
 
-from app.core.auth import get_current_user
+from app.core.auth import get_db_for_user
 from app.services.database_service import DatabaseService
 
 router = APIRouter()
 
 
-def _get_db() -> DatabaseService:
-    return DatabaseService()
-
-
 @router.get("/stats")
 async def get_stats(
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     campaigns = db.get_campaigns()
     accounts = db.get_accounts()

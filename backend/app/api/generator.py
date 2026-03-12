@@ -1,11 +1,12 @@
 from io import BytesIO
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from app.core.auth import get_current_user
+from app.core.auth import get_db_for_user, get_user_keitaro_client, get_user_panel_client
+from app.services.panel_client import PanelClient
 from app.schemas.generator import (
     AccountProfileCreate,
     AccountProfileResponse,
@@ -22,17 +23,11 @@ from app.services.excel_generator import CampaignSpec, generate_fb_excel
 router = APIRouter()
 
 
-def get_db() -> DatabaseService:
-    return DatabaseService()
-
-
 @router.get("/offers")
 async def list_offers(
-    request: Request,
-    _user: dict = Depends(get_current_user),
+    keitaro=Depends(get_user_keitaro_client),
 ):
     """Get list of offers from Keitaro, filtered by user's group."""
-    keitaro = request.app.state.keitaro
     # Auto-detect group by Keitaro login name
     groups = await keitaro.get_offer_groups()
     user_group = next(
@@ -44,20 +39,17 @@ async def list_offers(
 
 @router.get("/domains")
 async def list_domains(
-    request: Request,
-    _user: dict = Depends(get_current_user),
+    keitaro=Depends(get_user_keitaro_client),
 ):
     """Get list of domains from Keitaro."""
-    keitaro = request.app.state.keitaro
     return await keitaro.get_domains()
 
 
 @router.get("/pages/{account_id}")
 async def list_pages(
     account_id: UUID,
-    request: Request,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
+    panel: PanelClient = Depends(get_user_panel_client),
 ):
     """Get Facebook Pages for an account from Panel API."""
     account = db.get_account(account_id)
@@ -66,15 +58,13 @@ async def list_pages(
     panel_id = account.get("panel_account_id")
     if not panel_id:
         raise HTTPException(status_code=400, detail="Account has no panel_account_id")
-    panel = request.app.state.panel
     pages = await panel.get_account_pages(panel_id)
     return [{"id": p.id, "name": p.name} for p in pages]
 
 
 @router.get("/account-profiles", response_model=list[AccountProfileResponse])
 async def list_account_profiles(
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     return db.get_account_profiles()
 
@@ -86,8 +76,7 @@ async def list_account_profiles(
 )
 async def create_account_profile(
     payload: AccountProfileCreate,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     data = payload.model_dump()
     data["fb_account_id"] = str(data["fb_account_id"])
@@ -98,8 +87,7 @@ async def create_account_profile(
 async def update_account_profile(
     profile_id: UUID,
     payload: AccountProfileUpdate,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     data = payload.model_dump(exclude_unset=True)
     if not data:
@@ -113,12 +101,10 @@ async def update_account_profile(
 @router.post("/generate")
 async def generate_campaigns(
     req: GenerateRequest,
-    request: Request,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
+    keitaro=Depends(get_user_keitaro_client),
 ):
     """Create Keitaro campaigns, then generate FB Ads Manager Excel."""
-    keitaro = request.app.state.keitaro
     specs: list[CampaignSpec] = []
     keitaro_results: list[dict] = []
 

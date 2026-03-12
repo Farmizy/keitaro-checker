@@ -8,13 +8,9 @@ from app.api import accounts, campaigns, rules, logs, dashboard, scheduler, gene
 from app.api import auto_launcher as auto_launcher_api
 from app.api import settings as settings_api
 from app.config import settings
-from app.services.panel_client import PanelClient
-from app.services.keitaro_client import KeitaroClient
 from app.services.database_service import DatabaseService
-from app.services.action_executor import ActionExecutor
 from app.services.campaign_checker import CampaignChecker
 from app.services.scheduler_service import SchedulerService
-from app.services.telegram_notifier import TelegramNotifier
 from app.services.auto_launcher import AutoLauncher
 
 
@@ -22,27 +18,10 @@ from app.services.auto_launcher import AutoLauncher
 async def lifespan(app: FastAPI):
     logger.info("Starting FB Budget Manager")
 
-    panel = PanelClient()
-    keitaro = KeitaroClient()
-    db = DatabaseService()
-    executor = ActionExecutor(panel=panel, db=db)
+    admin_db = DatabaseService.admin()
 
-    notifier = None
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        notifier = TelegramNotifier(
-            bot_token=settings.telegram_bot_token,
-            chat_id=settings.telegram_chat_id,
-        )
-        logger.info("Telegram notifications enabled")
-
-    checker = CampaignChecker(
-        panel=panel, keitaro=keitaro, db=db, executor=executor,
-        notifier=notifier,
-    )
-
-    auto_launcher = AutoLauncher(
-        panel=panel, keitaro=keitaro, db=db, notifier=notifier,
-    )
+    checker = CampaignChecker(db=admin_db)
+    auto_launcher = AutoLauncher(db=admin_db)
 
     sched = SchedulerService(
         checker=checker,
@@ -50,8 +29,6 @@ async def lifespan(app: FastAPI):
         auto_launcher=auto_launcher,
     )
 
-    app.state.panel = panel
-    app.state.keitaro = keitaro
     app.state.scheduler = sched
     app.state.auto_launcher = auto_launcher
     sched.start()
@@ -59,10 +36,6 @@ async def lifespan(app: FastAPI):
     yield
 
     sched.stop()
-    if notifier:
-        await notifier.close()
-    await panel.close()
-    await keitaro.close()
     logger.info("Shutting down FB Budget Manager")
 
 
@@ -74,7 +47,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
-from app.core.auth import get_current_user
+from app.core.auth import get_db_for_user, get_user_panel_client
 from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse
 from app.services.database_service import DatabaseService
 from app.services.panel_client import PanelClient
@@ -11,14 +11,9 @@ from app.services.panel_client import PanelClient
 router = APIRouter()
 
 
-def get_db() -> DatabaseService:
-    return DatabaseService()
-
-
 @router.get("/", response_model=list[AccountResponse])
 async def list_accounts(
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     accounts = db.get_accounts()
     return accounts
@@ -26,12 +21,10 @@ async def list_accounts(
 
 @router.post("/sync")
 async def sync_accounts(
-    request: Request,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
+    panel: PanelClient = Depends(get_user_panel_client),
 ):
     """Sync accounts from 2KK Panel API into local DB."""
-    panel: PanelClient = request.app.state.panel
     from datetime import datetime
     import zoneinfo
 
@@ -60,8 +53,7 @@ async def sync_accounts(
 @router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 async def create_account(
     payload: AccountCreate,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     data = payload.model_dump()
     account = db.create_account(data)
@@ -71,8 +63,7 @@ async def create_account(
 @router.get("/{account_id}", response_model=AccountResponse)
 async def get_account(
     account_id: UUID,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     account = db.get_account(account_id)
     if not account:
@@ -84,8 +75,7 @@ async def get_account(
 async def update_account(
     account_id: UUID,
     payload: AccountUpdate,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     data = payload.model_dump(exclude_unset=True)
     if not data:
@@ -99,8 +89,7 @@ async def update_account(
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(
     account_id: UUID,
-    _user: dict = Depends(get_current_user),
-    db: DatabaseService = Depends(get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     deleted = db.delete_account(account_id)
     if not deleted:

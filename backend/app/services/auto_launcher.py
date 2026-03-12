@@ -1,6 +1,7 @@
 """Auto-Launcher — daily campaign analysis and auto-launch.
 
 Analyzes campaigns at 23:00 MSK, launches best ones at 04:00 MSK.
+Multi-tenant: iterates over all users with configured credentials.
 """
 
 import zoneinfo
@@ -19,17 +20,8 @@ NEW_CAMPAIGN_SPEND_RATIO = 1.5
 
 
 class AutoLauncher:
-    def __init__(
-        self,
-        panel: PanelClient,
-        keitaro: KeitaroClient,
-        db: DatabaseService,
-        notifier: TelegramNotifier | None = None,
-    ):
-        self.panel = panel
-        self.keitaro = keitaro
-        self.db = db
-        self.notifier = notifier
+    def __init__(self, db: DatabaseService):
+        self.db = db  # admin DatabaseService (service_role)
 
     @staticmethod
     def classify_campaign(
@@ -68,22 +60,63 @@ class AutoLauncher:
         return None
 
     async def run_analysis(self) -> None:
-        """Analyze campaigns and build launch queue. Runs at 23:00 MSK."""
-        settings = self.db.get_auto_launch_settings()
-        if not settings or not settings.get("is_enabled"):
-            logger.info("Auto-launcher disabled, skipping analysis")
-            return
+        """Analyze campaigns for all users. Runs at 23:00 MSK."""
+        all_users = self.db.get_all_user_settings()
+        for user_settings in all_users:
+            user_id = user_settings["user_id"]
+            if not user_settings.get("panel_jwt"):
+                continue
 
+            user_db = DatabaseService.admin(user_id=user_id)
+            settings = user_db.get_auto_launch_settings()
+            if not settings or not settings.get("is_enabled"):
+                continue
+
+            panel = PanelClient(
+                base_url=user_settings.get("panel_api_url") or None,
+                jwt_token=user_settings["panel_jwt"],
+            )
+            keitaro = KeitaroClient(
+                base_url=user_settings.get("keitaro_url") or None,
+                login=user_settings.get("keitaro_login") or None,
+                password=user_settings.get("keitaro_password") or None,
+            )
+            notifier = None
+            if user_settings.get("telegram_bot_token") and user_settings.get("telegram_chat_id"):
+                notifier = TelegramNotifier(
+                    bot_token=user_settings["telegram_bot_token"],
+                    chat_id=user_settings["telegram_chat_id"],
+                )
+
+            try:
+                await self._run_analysis_for_user(panel, keitaro, user_db, notifier, settings)
+            except Exception as e:
+                logger.error(f"Auto-launcher analysis failed for user {user_id}: {e}")
+            finally:
+                await panel.close()
+                await keitaro.close()
+                if notifier:
+                    await notifier.close()
+
+    async def _run_analysis_for_user(
+        self,
+        panel: PanelClient,
+        keitaro: KeitaroClient,
+        db: DatabaseService,
+        notifier: TelegramNotifier | None,
+        settings: dict,
+    ) -> None:
+        """Analyze campaigns and build launch queue for a single user."""
         try:
             now = datetime.now(MOSCOW_TZ)
             tomorrow = (now + timedelta(days=1)).date()
 
             # Clear old queue entries
-            self.db.clear_old_launch_queue(str(tomorrow))
+            db.clear_old_launch_queue(str(tomorrow))
 
             # 1. Get accounts and filter ERROR/CHECKPOINT
             today_str = now.strftime("%Y-%m-%d")
-            accounts = await self.panel.get_accounts(
+            accounts = await panel.get_accounts(
                 start_date=today_str, end_date=today_str,
             )
             active_account_names = {}
@@ -95,27 +128,27 @@ class AutoLauncher:
                     active_account_names[acc.name] = acc
 
             # 2. Get all campaigns from Panel (no withSpent — need stopped ones too)
-            panel_campaigns = await self.panel.get_all_campaigns(
+            panel_campaigns = await panel.get_all_campaigns(
                 start_date=today_str, end_date=today_str,
             )
 
             # 3. Get Keitaro stats: 2-day and 7-day
-            await self.keitaro.ensure_authenticated()
+            await keitaro.ensure_authenticated()
 
             date_2d_from = (now - timedelta(days=1)).strftime("%Y-%m-%d")
             date_7d_from = (now - timedelta(days=6)).strftime("%Y-%m-%d")
             date_to = now.strftime("%Y-%m-%d")
 
-            stats_2d = await self.keitaro.get_all_campaign_stats_by_period(
+            stats_2d = await keitaro.get_all_campaign_stats_by_period(
                 date_from=date_2d_from, date_to=date_to,
             )
-            stats_7d = await self.keitaro.get_all_campaign_stats_by_period(
+            stats_7d = await keitaro.get_all_campaign_stats_by_period(
                 date_from=date_7d_from, date_to=date_to,
             )
 
             # 4. Get blacklist and DB campaigns
-            blacklisted_ids = self.db.get_blacklisted_campaign_ids()
-            db_campaigns_list = self.db.get_campaigns()
+            blacklisted_ids = db.get_blacklisted_campaign_ids()
+            db_campaigns_list = db.get_campaigns()
             db_campaigns = {c["fb_campaign_id"]: c for c in db_campaigns_list}
 
             # 5. Classify each campaign
@@ -191,7 +224,7 @@ class AutoLauncher:
                     continue
 
                 if launch_type == "blacklist":
-                    self.db.add_to_blacklist({
+                    db.add_to_blacklist({
                         "campaign_id": db_camp["id"],
                         "fb_campaign_id": pc.campaign_id,
                         "fb_campaign_name": pc.name,
@@ -222,12 +255,12 @@ class AutoLauncher:
 
             # 6. Write queue to DB
             for item in queue_items:
-                self.db.add_to_launch_queue(item)
+                db.add_to_launch_queue(item)
 
             # 7. Send Telegram notification
-            if self.notifier:
+            if notifier:
                 await self._send_analysis_telegram(
-                    queue_items, error_accounts, blacklisted_count, tomorrow,
+                    notifier, queue_items, error_accounts, blacklisted_count, tomorrow,
                 )
 
             logger.info(
@@ -237,36 +270,67 @@ class AutoLauncher:
 
         except TokenExpiredError:
             logger.error("Auto-launcher analysis: Panel JWT expired")
-            if self.notifier:
-                await self.notifier.send(
-                    "⚠️ Auto-Launcher: Panel JWT истёк! Анализ не выполнен."
+            if notifier:
+                await notifier.send(
+                    "\u26a0\ufe0f Auto-Launcher: Panel JWT \u0438\u0441\u0442\u0451\u043a! \u0410\u043d\u0430\u043b\u0438\u0437 \u043d\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d."
                 )
-        except Exception as e:
-            logger.exception(f"Auto-launcher analysis failed: {e}")
 
     async def run_launch(self) -> None:
-        """Launch queued campaigns. Runs at 04:00 MSK."""
-        settings = self.db.get_auto_launch_settings()
-        if not settings or not settings.get("is_enabled"):
-            logger.info("Auto-launcher disabled, skipping launch")
-            return
+        """Launch queued campaigns for all users. Runs at 04:00 MSK."""
+        all_users = self.db.get_all_user_settings()
+        for user_settings in all_users:
+            user_id = user_settings["user_id"]
+            if not user_settings.get("panel_jwt"):
+                continue
 
+            user_db = DatabaseService.admin(user_id=user_id)
+            settings = user_db.get_auto_launch_settings()
+            if not settings or not settings.get("is_enabled"):
+                continue
+
+            panel = PanelClient(
+                base_url=user_settings.get("panel_api_url") or None,
+                jwt_token=user_settings["panel_jwt"],
+            )
+            notifier = None
+            if user_settings.get("telegram_bot_token") and user_settings.get("telegram_chat_id"):
+                notifier = TelegramNotifier(
+                    bot_token=user_settings["telegram_bot_token"],
+                    chat_id=user_settings["telegram_chat_id"],
+                )
+
+            try:
+                await self._run_launch_for_user(panel, user_db, notifier)
+            except Exception as e:
+                logger.error(f"Auto-launcher launch failed for user {user_id}: {e}")
+            finally:
+                await panel.close()
+                if notifier:
+                    await notifier.close()
+
+    async def _run_launch_for_user(
+        self,
+        panel: PanelClient,
+        db: DatabaseService,
+        notifier: TelegramNotifier | None,
+    ) -> None:
+        """Launch queued campaigns for a single user."""
         try:
             now = datetime.now(MOSCOW_TZ)
             today = now.strftime("%Y-%m-%d")
 
-            queue = self.db.get_launch_queue(launch_date=today, status="pending")
+            queue = db.get_launch_queue(launch_date=today, status="pending")
             if not queue:
                 logger.info("Auto-launcher: no campaigns to launch today")
                 return
 
             # Fresh Panel data for current status + account check
-            panel_campaigns = await self.panel.get_all_campaigns(
+            panel_campaigns = await panel.get_all_campaigns(
                 start_date=today, end_date=today,
             )
             panel_by_fb_id = {pc.campaign_id: pc for pc in panel_campaigns}
 
-            accounts = await self.panel.get_accounts(
+            accounts = await panel.get_accounts(
                 start_date=today, end_date=today,
             )
             error_account_names = {
@@ -282,7 +346,7 @@ class AutoLauncher:
                 try:
                     pc = panel_by_fb_id.get(item["fb_campaign_id"])
                     if not pc:
-                        self.db.update_launch_queue_item(item["id"], {
+                        db.update_launch_queue_item(item["id"], {
                             "status": "failed",
                             "error_message": "Campaign not found in Panel",
                         })
@@ -291,7 +355,7 @@ class AutoLauncher:
 
                     # Skip if account has error
                     if pc.account_name in error_account_names:
-                        self.db.update_launch_queue_item(item["id"], {
+                        db.update_launch_queue_item(item["id"], {
                             "status": "skipped",
                             "error_message": f"Account {pc.account_name} in error state",
                         })
@@ -300,7 +364,7 @@ class AutoLauncher:
 
                     # Skip if already active
                     if pc.effective_status == "ACTIVE":
-                        self.db.update_launch_queue_item(item["id"], {
+                        db.update_launch_queue_item(item["id"], {
                             "status": "skipped",
                         })
                         skipped += 1
@@ -308,23 +372,23 @@ class AutoLauncher:
 
                     # Set budget first, then resume
                     target_budget = float(item.get("target_budget", 30))
-                    await self.panel.set_budget(pc.internal_id, target_budget)
-                    await self.panel.resume_campaign(pc.internal_id)
+                    await panel.set_budget(pc.internal_id, target_budget)
+                    await panel.resume_campaign(pc.internal_id)
 
                     # Update queue
-                    self.db.update_launch_queue_item(item["id"], {
+                    db.update_launch_queue_item(item["id"], {
                         "status": "launched",
                         "launched_at": datetime.now(MOSCOW_TZ).isoformat(),
                     })
 
                     # Update campaign in DB
-                    self.db.update_campaign(item["campaign_id"], {
+                    db.update_campaign(item["campaign_id"], {
                         "status": "active",
                         "current_budget": target_budget,
                     })
 
                     # Log action
-                    self.db.create_action_log({
+                    db.create_action_log({
                         "campaign_id": str(item["campaign_id"]),
                         "fb_account_id": str(item["fb_account_id"]),
                         "action_type": "auto_launch",
@@ -342,33 +406,32 @@ class AutoLauncher:
                 except Exception as e:
                     failed += 1
                     logger.error(f"Failed to launch {item['fb_campaign_name']}: {e}")
-                    self.db.update_launch_queue_item(item["id"], {
+                    db.update_launch_queue_item(item["id"], {
                         "status": "failed",
                         "error_message": str(e)[:500],
                     })
 
             # Telegram report
-            if self.notifier:
-                await self.notifier.send(
-                    f"🚀 Auto-Launcher: запуск завершён\n\n"
-                    f"✅ Запущено: {launched}\n"
-                    f"⏭ Пропущено: {skipped}\n"
-                    f"❌ Ошибок: {failed}"
+            if notifier:
+                await notifier.send(
+                    f"\U0001f680 Auto-Launcher: \u0437\u0430\u043f\u0443\u0441\u043a \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d\n\n"
+                    f"\u2705 \u0417\u0430\u043f\u0443\u0449\u0435\u043d\u043e: {launched}\n"
+                    f"\u23ed \u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: {skipped}\n"
+                    f"\u274c \u041e\u0448\u0438\u0431\u043e\u043a: {failed}"
                 )
 
             logger.info(f"Auto-launcher: {launched} launched, {skipped} skipped, {failed} failed")
 
         except TokenExpiredError:
             logger.error("Auto-launcher launch: Panel JWT expired")
-            if self.notifier:
-                await self.notifier.send(
-                    "⚠️ Auto-Launcher: Panel JWT истёк! Запуск не выполнен."
+            if notifier:
+                await notifier.send(
+                    "\u26a0\ufe0f Auto-Launcher: Panel JWT \u0438\u0441\u0442\u0451\u043a! \u0417\u0430\u043f\u0443\u0441\u043a \u043d\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d."
                 )
-        except Exception as e:
-            logger.exception(f"Auto-launcher launch failed: {e}")
 
     async def _send_analysis_telegram(
         self,
+        notifier: TelegramNotifier,
         queue_items: list[dict],
         error_accounts: list,
         blacklisted_count: int,
@@ -377,35 +440,35 @@ class AutoLauncher:
         new_items = [i for i in queue_items if i["launch_type"] == "new"]
         proven_items = [i for i in queue_items if i["launch_type"] == "proven"]
 
-        lines = [f"📋 Auto-Launcher: план на {launch_date}\n"]
+        lines = [f"\U0001f4cb Auto-Launcher: \u043f\u043b\u0430\u043d \u043d\u0430 {launch_date}\n"]
 
         if new_items:
-            lines.append(f"\n🆕 Новые (тест): {len(new_items)}")
+            lines.append(f"\n\U0001f195 \u041d\u043e\u0432\u044b\u0435 (\u0442\u0435\u0441\u0442): {len(new_items)}")
             for item in new_items[:10]:
-                lines.append(f"  • {item['fb_campaign_name']}")
+                lines.append(f"  \u2022 {item['fb_campaign_name']}")
 
         if proven_items:
-            lines.append(f"\n✅ Проверенные: {len(proven_items)}")
+            lines.append(f"\n\u2705 \u041f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u043d\u044b\u0435: {len(proven_items)}")
             for item in proven_items[:10]:
                 ad = item["analysis_data"]
                 lines.append(
-                    f"  • {item['fb_campaign_name']} "
+                    f"  \u2022 {item['fb_campaign_name']} "
                     f"(ROI: {ad.get('roi_2d', 0):.0f}%, leads: {ad.get('leads_2d', 0)})"
                 )
 
         if error_accounts:
-            lines.append(f"\n⚠️ Аккаунты с ошибкой: {len(error_accounts)}")
+            lines.append(f"\n\u26a0\ufe0f \u0410\u043a\u043a\u0430\u0443\u043d\u0442\u044b \u0441 \u043e\u0448\u0438\u0431\u043a\u043e\u0439: {len(error_accounts)}")
             for acc in error_accounts[:5]:
-                lines.append(f"  • {acc.name}: {acc.status}")
+                lines.append(f"  \u2022 {acc.name}: {acc.status}")
 
         if blacklisted_count:
-            lines.append(f"\n🚫 Добавлено в чёрный список: {blacklisted_count}")
+            lines.append(f"\n\U0001f6ab \u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u0447\u0451\u0440\u043d\u044b\u0439 \u0441\u043f\u0438\u0441\u043e\u043a: {blacklisted_count}")
 
         if queue_items:
             budget = queue_items[0]["target_budget"]
-            lines.append(f"\nБюджет: ${budget:.0f} | Запуск: 04:00 MSK")
+            lines.append(f"\n\u0411\u044e\u0434\u0436\u0435\u0442: ${budget:.0f} | \u0417\u0430\u043f\u0443\u0441\u043a: 04:00 MSK")
 
         if not queue_items:
-            lines.append("\nНет кампаний для запуска.")
+            lines.append("\n\u041d\u0435\u0442 \u043a\u0430\u043c\u043f\u0430\u043d\u0438\u0439 \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430.")
 
-        await self.notifier.send("\n".join(lines))
+        await notifier.send("\n".join(lines))

@@ -7,14 +7,10 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, get_db_for_user
 from app.services.database_service import DatabaseService
 
 router = APIRouter()
-
-
-def _get_db() -> DatabaseService:
-    return DatabaseService()
 
 
 class SettingsUpdate(BaseModel):
@@ -34,8 +30,7 @@ class SettingsUpdate(BaseModel):
 
 @router.get("/settings")
 async def get_settings(
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     return db.get_auto_launch_settings() or {}
 
@@ -44,8 +39,7 @@ async def get_settings(
 async def update_settings(
     body: SettingsUpdate,
     request: Request,
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     data = body.model_dump(exclude_none=True)
     if not data:
@@ -68,8 +62,7 @@ async def update_settings(
 async def get_queue(
     launch_date: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     return db.get_launch_queue(launch_date=launch_date, status=status)
 
@@ -77,8 +70,7 @@ async def get_queue(
 @router.delete("/queue/{item_id}")
 async def remove_from_queue(
     item_id: UUID,
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     return db.update_launch_queue_item(str(item_id), {
         "status": "removed",
@@ -90,8 +82,7 @@ async def remove_from_queue(
 
 @router.get("/blacklist")
 async def get_blacklist(
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     return db.get_blacklist()
 
@@ -99,8 +90,7 @@ async def get_blacklist(
 @router.post("/blacklist")
 async def add_to_blacklist(
     data: dict,
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     return db.add_to_blacklist({
         "campaign_id": data["campaign_id"],
@@ -114,8 +104,7 @@ async def add_to_blacklist(
 @router.delete("/blacklist/{campaign_id}")
 async def remove_from_blacklist(
     campaign_id: UUID,
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     if not db.remove_from_blacklist(str(campaign_id)):
         raise HTTPException(404, "Not found")
@@ -155,8 +144,7 @@ async def trigger_launch(
 @router.get("/status")
 async def get_status(
     request: Request,
-    _user=Depends(get_current_user),
-    db: DatabaseService = Depends(_get_db),
+    db: DatabaseService = Depends(get_db_for_user),
 ):
     sched = getattr(request.app.state, "scheduler", None)
     settings = db.get_auto_launch_settings()

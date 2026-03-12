@@ -1,115 +1,181 @@
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
 from supabase import Client
 
 from app.core.encryption import encrypt, decrypt
-from app.db.client import get_supabase
+from app.db.client import get_supabase, get_supabase_admin
 
 ENCRYPTED_FIELDS = {"access_token", "cookie", "proxy_password"}
 
+USER_SETTINGS_ENCRYPTED_FIELDS = {
+    "keitaro_login", "keitaro_password", "panel_jwt", "telegram_bot_token",
+}
 
-def _encrypt_fields(data: dict[str, Any]) -> dict[str, Any]:
+
+def _encrypt_fields(
+    data: dict[str, Any],
+    fields: set[str] = ENCRYPTED_FIELDS,
+) -> dict[str, Any]:
     """Encrypt sensitive fields before writing to DB."""
     result = dict(data)
-    for field in ENCRYPTED_FIELDS:
+    for field in fields:
         if field in result and result[field]:
             result[field] = encrypt(result[field])
     return result
 
 
-def _decrypt_fields(data: dict[str, Any]) -> dict[str, Any]:
+def _decrypt_fields(
+    data: dict[str, Any],
+    fields: set[str] = ENCRYPTED_FIELDS,
+) -> dict[str, Any]:
     """Decrypt sensitive fields after reading from DB."""
     result = dict(data)
-    for field in ENCRYPTED_FIELDS:
+    for field in fields:
         if field in result and result[field]:
             result[field] = decrypt(result[field])
     return result
 
 
 class DatabaseService:
-    def __init__(self, client: Optional[Client] = None):
+    def __init__(self, client: Optional[Client] = None, user_id: Optional[str] = None):
         self.client = client or get_supabase()
+        self.user_id = user_id
+        self._cached_account_ids: Optional[list[str]] = None
+
+    @classmethod
+    def for_user(cls, user_id: str) -> "DatabaseService":
+        """Create service scoped to a user (admin client + app-level filtering)."""
+        return cls(client=get_supabase_admin(), user_id=user_id)
+
+    @classmethod
+    def admin(cls, user_id: Optional[str] = None) -> "DatabaseService":
+        """Create service with admin client (bypasses RLS). For background tasks."""
+        return cls(client=get_supabase_admin(), user_id=user_id)
+
+    # --- helpers ---
+
+    def _get_user_account_ids(self) -> list[str]:
+        """Get list of fb_accounts.id UUIDs for current user. Cached per instance."""
+        if not self.user_id:
+            return []
+        if self._cached_account_ids is not None:
+            return self._cached_account_ids
+        response = (
+            self.client.table("fb_accounts")
+            .select("id")
+            .eq("user_id", self.user_id)
+            .execute()
+        )
+        self._cached_account_ids = [row["id"] for row in response.data]
+        return self._cached_account_ids
 
     # --- fb_accounts ---
 
     def get_accounts(self) -> list[dict]:
-        response = self.client.table("fb_accounts").select("*").execute()
+        query = self.client.table("fb_accounts").select("*")
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         return [_decrypt_fields(row) for row in response.data]
 
     def get_account(self, account_id: UUID) -> Optional[dict]:
-        response = (
+        query = (
             self.client.table("fb_accounts")
             .select("*")
             .eq("id", str(account_id))
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         if not response.data:
             return None
         return _decrypt_fields(response.data[0])
 
     def create_account(self, data: dict[str, Any]) -> dict:
         encrypted = _encrypt_fields(data)
+        if self.user_id and "user_id" not in encrypted:
+            encrypted["user_id"] = self.user_id
         response = self.client.table("fb_accounts").insert(encrypted).execute()
+        self._cached_account_ids = None  # invalidate cache
         return _decrypt_fields(response.data[0])
 
     def update_account(self, account_id: UUID, data: dict[str, Any]) -> Optional[dict]:
         encrypted = _encrypt_fields(data)
-        response = (
+        query = (
             self.client.table("fb_accounts")
             .update(encrypted)
             .eq("id", str(account_id))
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         if not response.data:
             return None
         return _decrypt_fields(response.data[0])
 
     def delete_account(self, account_id: UUID) -> bool:
-        response = (
+        query = (
             self.client.table("fb_accounts")
             .delete()
             .eq("id", str(account_id))
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
+        self._cached_account_ids = None  # invalidate cache
         return len(response.data) > 0
 
     def get_active_accounts(self) -> list[dict]:
-        response = (
+        query = (
             self.client.table("fb_accounts")
             .select("*")
             .eq("is_active", True)
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         return [_decrypt_fields(row) for row in response.data]
 
     def get_account_by_panel_id(self, panel_id: int) -> Optional[dict]:
         """Get account by panel_account_id."""
-        response = (
+        query = (
             self.client.table("fb_accounts")
             .select("*")
             .eq("panel_account_id", panel_id)
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         return _decrypt_fields(response.data[0]) if response.data else None
 
     def upsert_account_by_panel_id(self, panel_id: int, data: dict[str, Any]) -> dict:
         """Upsert account by panel_account_id."""
-        existing = (
+        query = (
             self.client.table("fb_accounts")
             .select("*")
             .eq("panel_account_id", panel_id)
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        existing = query.execute()
+
         if existing.data:
-            response = (
+            update_query = (
                 self.client.table("fb_accounts")
                 .update(data)
                 .eq("panel_account_id", panel_id)
-                .execute()
             )
+            if self.user_id:
+                update_query = update_query.eq("user_id", self.user_id)
+            response = update_query.execute()
             return response.data[0]
+
+        if self.user_id and "user_id" not in data:
+            data["user_id"] = self.user_id
         response = self.client.table("fb_accounts").insert(data).execute()
+        self._cached_account_ids = None  # invalidate cache
         return response.data[0]
 
     # --- campaigns ---
@@ -122,6 +188,11 @@ class DatabaseService:
         query = self.client.table("campaigns").select("*")
         if account_id:
             query = query.eq("fb_account_id", str(account_id))
+        elif self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return []
+            query = query.in_("fb_account_id", account_ids)
         if status:
             query = query.eq("status", status)
         response = query.execute()
@@ -140,12 +211,17 @@ class DatabaseService:
         return response.data[0] if response.data else None
 
     def get_campaign(self, campaign_id: UUID) -> Optional[dict]:
-        response = (
+        query = (
             self.client.table("campaigns")
             .select("*")
             .eq("id", str(campaign_id))
-            .execute()
         )
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return None
+            query = query.in_("fb_account_id", account_ids)
+        response = query.execute()
         return response.data[0] if response.data else None
 
     def upsert_campaign(self, data: dict[str, Any]) -> dict:
@@ -157,12 +233,17 @@ class DatabaseService:
         return response.data[0]
 
     def update_campaign(self, campaign_id: UUID, data: dict[str, Any]) -> Optional[dict]:
-        response = (
+        query = (
             self.client.table("campaigns")
             .update(data)
             .eq("id", str(campaign_id))
-            .execute()
         )
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return None
+            query = query.in_("fb_account_id", account_ids)
+        response = query.execute()
         return response.data[0] if response.data else None
 
     # --- action_logs ---
@@ -186,12 +267,19 @@ class DatabaseService:
         )
         if campaign_id:
             query = query.eq("campaign_id", str(campaign_id))
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return []
+            query = query.in_("fb_account_id", account_ids)
         response = query.execute()
         return response.data
 
     # --- check_runs ---
 
     def create_check_run(self, data: dict[str, Any]) -> dict:
+        if self.user_id and "user_id" not in data:
+            data["user_id"] = self.user_id
         response = self.client.table("check_runs").insert(data).execute()
         return response.data[0]
 
@@ -205,32 +293,38 @@ class DatabaseService:
         return response.data[0] if response.data else None
 
     def get_latest_check_runs(self, limit: int = 10) -> list[dict]:
-        response = (
+        query = (
             self.client.table("check_runs")
             .select("*")
             .order("started_at", desc=True)
             .limit(limit)
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         return response.data
 
     # --- rule_sets / rule_steps ---
 
     def get_default_rule_set(self) -> Optional[dict]:
-        response = (
+        query = (
             self.client.table("rule_sets")
             .select("*, rule_steps(*)")
             .eq("is_default", True)
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         return response.data[0] if response.data else None
 
     def get_rule_sets(self) -> list[dict]:
-        response = (
+        query = (
             self.client.table("rule_sets")
             .select("*, rule_steps(*)")
-            .execute()
         )
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.execute()
         return response.data
 
     def update_rule_step(self, step_id: UUID, data: dict[str, Any]) -> Optional[dict]:
@@ -245,7 +339,13 @@ class DatabaseService:
     # --- fb_account_profiles ---
 
     def get_account_profiles(self) -> list[dict]:
-        response = self.client.table("fb_account_profiles").select("*").execute()
+        query = self.client.table("fb_account_profiles").select("*")
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return []
+            query = query.in_("fb_account_id", account_ids)
+        response = query.execute()
         return response.data
 
     def get_account_profile_by_account(self, fb_account_id: UUID) -> Optional[dict]:
@@ -273,15 +373,25 @@ class DatabaseService:
     # --- Auto-Launch Settings ---
 
     def get_auto_launch_settings(self) -> Optional[dict]:
-        response = self.client.table("auto_launch_settings").select("*").limit(1).execute()
+        query = self.client.table("auto_launch_settings").select("*")
+        if self.user_id:
+            query = query.eq("user_id", self.user_id)
+        response = query.limit(1).execute()
         return response.data[0] if response.data else None
+
+    def get_all_auto_launch_settings(self) -> list[dict]:
+        """Get auto-launch settings for ALL users. Admin only."""
+        response = self.client.table("auto_launch_settings").select("*").execute()
+        return response.data
 
     def update_auto_launch_settings(self, data: dict[str, Any]) -> Optional[dict]:
         current = self.get_auto_launch_settings()
         if not current:
+            if self.user_id and "user_id" not in data:
+                data["user_id"] = self.user_id
             response = self.client.table("auto_launch_settings").insert(data).execute()
             return response.data[0] if response.data else None
-        data["updated_at"] = "now()"
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
         response = (
             self.client.table("auto_launch_settings")
             .update(data)
@@ -308,6 +418,11 @@ class DatabaseService:
             query = query.eq("launch_date", launch_date)
         if status:
             query = query.eq("status", status)
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return []
+            query = query.in_("fb_account_id", account_ids)
         query = query.order("created_at")
         return query.execute().data
 
@@ -330,17 +445,44 @@ class DatabaseService:
     # --- Auto-Launch Blacklist ---
 
     def get_blacklist(self) -> list[dict]:
-        return (
+        query = (
             self.client.table("auto_launch_blacklist")
             .select("*")
             .order("blacklisted_at", desc=True)
-            .execute()
-            .data
         )
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return []
+            # Filter via campaign_id → campaigns → fb_account_id
+            campaign_ids = self._get_user_campaign_ids(account_ids)
+            if not campaign_ids:
+                return []
+            query = query.in_("campaign_id", campaign_ids)
+        return query.execute().data
 
     def get_blacklisted_campaign_ids(self) -> set[str]:
-        response = self.client.table("auto_launch_blacklist").select("campaign_id").execute()
+        query = self.client.table("auto_launch_blacklist").select("campaign_id")
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if not account_ids:
+                return set()
+            campaign_ids = self._get_user_campaign_ids(account_ids)
+            if not campaign_ids:
+                return set()
+            query = query.in_("campaign_id", campaign_ids)
+        response = query.execute()
         return {row["campaign_id"] for row in response.data}
+
+    def _get_user_campaign_ids(self, account_ids: list[str]) -> list[str]:
+        """Get campaign IDs belonging to given accounts."""
+        response = (
+            self.client.table("campaigns")
+            .select("id")
+            .in_("fb_account_id", account_ids)
+            .execute()
+        )
+        return [row["id"] for row in response.data]
 
     def add_to_blacklist(self, data: dict[str, Any]) -> dict:
         response = self.client.table("auto_launch_blacklist").upsert(
@@ -356,3 +498,63 @@ class DatabaseService:
             .execute()
         )
         return len(response.data) > 0
+
+    # --- User Settings ---
+
+    def get_user_settings(self, user_id: Optional[str] = None) -> Optional[dict]:
+        """Get settings for a specific user."""
+        uid = user_id or self.user_id
+        if not uid:
+            return None
+        response = (
+            self.client.table("user_settings")
+            .select("*")
+            .eq("user_id", uid)
+            .execute()
+        )
+        if not response.data:
+            return None
+        return _decrypt_fields(response.data[0], USER_SETTINGS_ENCRYPTED_FIELDS)
+
+    def update_user_settings(self, data: dict[str, Any], user_id: Optional[str] = None) -> Optional[dict]:
+        """Update user settings. Creates if not exists."""
+        uid = user_id or self.user_id
+        if not uid:
+            return None
+
+        encrypted = _encrypt_fields(data, USER_SETTINGS_ENCRYPTED_FIELDS)
+        encrypted["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        existing = (
+            self.client.table("user_settings")
+            .select("id")
+            .eq("user_id", uid)
+            .execute()
+        )
+
+        if existing.data:
+            response = (
+                self.client.table("user_settings")
+                .update(encrypted)
+                .eq("user_id", uid)
+                .execute()
+            )
+        else:
+            encrypted["user_id"] = uid
+            response = (
+                self.client.table("user_settings")
+                .insert(encrypted)
+                .execute()
+            )
+
+        if not response.data:
+            return None
+        return _decrypt_fields(response.data[0], USER_SETTINGS_ENCRYPTED_FIELDS)
+
+    def get_all_user_settings(self) -> list[dict]:
+        """Get settings for ALL users. Admin only, for background tasks."""
+        response = self.client.table("user_settings").select("*").execute()
+        return [
+            _decrypt_fields(row, USER_SETTINGS_ENCRYPTED_FIELDS)
+            for row in response.data
+        ]

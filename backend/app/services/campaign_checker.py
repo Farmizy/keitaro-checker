@@ -1,6 +1,9 @@
 """Orchestrator for the 10-minute campaign check cycle.
 
-Flow:
+Multi-tenant: iterates over all users with configured settings,
+creates per-user clients, runs checks independently.
+
+Flow per user:
 1. Fetch campaigns + spend from Panel API
 2. Fetch conversions from Keitaro
 3. Sync campaigns to DB
@@ -17,29 +20,68 @@ from app.services.keitaro_client import KeitaroClient
 from app.services.database_service import DatabaseService
 from app.services.action_executor import ActionExecutor
 from app.services.rule_engine import evaluate, CampaignState, ActionType
+from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
 
 class CampaignChecker:
 
-    def __init__(
+    def __init__(self, db: DatabaseService):
+        self.db = db  # admin DatabaseService (service_role)
+
+    async def run_check(self):
+        """Main check cycle — iterates over all configured users."""
+        all_users = self.db.get_all_user_settings()
+        logger.info(f"Starting check cycle for {len(all_users)} user(s)")
+
+        for user_settings in all_users:
+            user_id = user_settings["user_id"]
+
+            # Skip users without Panel JWT (not configured)
+            if not user_settings.get("panel_jwt"):
+                logger.debug(f"User {user_id}: no panel_jwt — skipped")
+                continue
+
+            user_db = DatabaseService.admin(user_id=user_id)
+            panel = PanelClient(
+                base_url=user_settings.get("panel_api_url") or None,
+                jwt_token=user_settings["panel_jwt"],
+            )
+            keitaro = KeitaroClient(
+                base_url=user_settings.get("keitaro_url") or None,
+                login=user_settings.get("keitaro_login") or None,
+                password=user_settings.get("keitaro_password") or None,
+            )
+            executor = ActionExecutor(panel=panel, db=user_db)
+
+            notifier = None
+            if user_settings.get("telegram_bot_token") and user_settings.get("telegram_chat_id"):
+                notifier = TelegramNotifier(
+                    bot_token=user_settings["telegram_bot_token"],
+                    chat_id=user_settings["telegram_chat_id"],
+                )
+
+            try:
+                await self._run_check_for_user(panel, keitaro, user_db, executor, notifier)
+            except Exception as e:
+                logger.error(f"Check failed for user {user_id}: {e}")
+            finally:
+                await panel.close()
+                await keitaro.close()
+                if notifier:
+                    await notifier.close()
+
+    async def _run_check_for_user(
         self,
         panel: PanelClient,
         keitaro: KeitaroClient,
         db: DatabaseService,
         executor: ActionExecutor,
-        notifier=None,  # TelegramNotifier — Phase 6
+        notifier: TelegramNotifier | None,
     ):
-        self.panel = panel
-        self.keitaro = keitaro
-        self.db = db
-        self.executor = executor
-        self.notifier = notifier
-
-    async def run_check(self):
-        """Main check cycle."""
-        run = self.db.create_check_run({
+        """Run full check cycle for a single user."""
+        run = db.create_check_run({
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -55,13 +97,13 @@ class CampaignChecker:
 
             # 1. Sync accounts from Panel every cycle
             logger.info("Syncing accounts from Panel...")
-            await self._sync_accounts_from_panel(today)
-            db_accounts = self.db.get_active_accounts()
+            await self._sync_accounts_from_panel(panel, db, today)
+            db_accounts = db.get_active_accounts()
             logger.info(f"Got {len(db_accounts)} accounts from DB")
 
             # 2. Fetch campaigns from Panel API (with spend)
             logger.info("Fetching campaigns from Panel API...")
-            panel_campaigns = await self.panel.get_all_campaigns(
+            panel_campaigns = await panel.get_all_campaigns(
                 start_date=today,
                 end_date=today,
                 with_spent=True,
@@ -69,14 +111,14 @@ class CampaignChecker:
             logger.info(f"Got {len(panel_campaigns)} campaigns from Panel")
 
             # 2b. Update accounts with real FB ad account IDs from campaign data
-            self._update_account_fb_ids(panel_campaigns)
+            self._update_account_fb_ids(db, panel_campaigns)
 
             # 3. Fetch conversions from Keitaro (grouped by campaign_id via sub_id_2)
             logger.info("Fetching conversions from Keitaro...")
             keitaro_conversions: dict[str, int] = {}
             try:
-                await self.keitaro.ensure_authenticated()
-                keitaro_conversions = await self.keitaro.get_all_conversions_by_campaign()
+                await keitaro.ensure_authenticated()
+                keitaro_conversions = await keitaro.get_all_conversions_by_campaign()
                 logger.info(f"Got conversions for {len(keitaro_conversions)} campaign IDs from Keitaro")
             except Exception as e:
                 logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
@@ -93,6 +135,7 @@ class CampaignChecker:
             for pc in panel_campaigns:
                 try:
                     result = await self._process_campaign(
+                        db, executor, notifier,
                         pc, account_by_panel_id, account_by_name,
                         keitaro_conversions, now,
                     )
@@ -105,7 +148,7 @@ class CampaignChecker:
                     errors_count += 1
                     logger.error(f"Error processing campaign {pc.campaign_id}: {e}")
 
-            self.db.update_check_run(run_id, {
+            db.update_check_run(run_id, {
                 "status": "completed",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "campaigns_checked": campaigns_checked,
@@ -120,7 +163,7 @@ class CampaignChecker:
 
         except TokenExpiredError as e:
             logger.error(f"Panel JWT expired, skipping check cycle: {e}")
-            self.db.update_check_run(run_id, {
+            db.update_check_run(run_id, {
                 "status": "failed",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "campaigns_checked": campaigns_checked,
@@ -128,16 +171,16 @@ class CampaignChecker:
                 "errors_count": errors_count + 1,
                 "details": {"error": "Panel JWT expired"},
             })
-            if self.notifier:
-                await self.notifier.send(
+            if notifier:
+                await notifier.send(
                     "⚠️ <b>Panel JWT токен истёк!</b>\n\n"
                     "Проверка кампаний пропущена.\n"
-                    "Обновите токен: POST /api/v1/settings/panel-jwt"
+                    "Обновите токен в Settings → Panel API → JWT Token"
                 )
 
         except Exception as e:
             logger.error(f"Check run failed: {e}")
-            self.db.update_check_run(run_id, {
+            db.update_check_run(run_id, {
                 "status": "failed",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "campaigns_checked": campaigns_checked,
@@ -149,6 +192,9 @@ class CampaignChecker:
 
     async def _process_campaign(
         self,
+        db: DatabaseService,
+        executor: ActionExecutor,
+        notifier: TelegramNotifier | None,
         pc: PanelCampaign,
         account_by_panel_id: dict,
         account_by_name: dict,
@@ -174,7 +220,7 @@ class CampaignChecker:
         fb_account_id = db_account["id"]
 
         # Always sync campaign status to DB (even if PAUSED)
-        db_campaign = self._sync_campaign(pc, fb_account_id)
+        db_campaign = self._sync_campaign(db, pc, fb_account_id)
 
         # Skip non-active campaigns in FB
         if pc.effective_status != "ACTIVE":
@@ -219,7 +265,7 @@ class CampaignChecker:
             f"spend=${pc.spend:.2f}, leads={leads} → {action.type.value}: {action.reason}"
         )
 
-        success = await self.executor.execute(
+        success = await executor.execute(
             action=action,
             campaign_db_id=db_campaign["id"],
             panel_internal_id=pc.internal_id,
@@ -227,10 +273,10 @@ class CampaignChecker:
         )
 
         # Notify on STOP / MANUAL_REVIEW
-        if action.type in (ActionType.STOP, ActionType.MANUAL_REVIEW) and self.notifier:
+        if action.type in (ActionType.STOP, ActionType.MANUAL_REVIEW) and notifier:
             try:
                 label = "STOP" if action.type == ActionType.STOP else "Manual review"
-                await self.notifier.send(
+                await notifier.send(
                     f"{label}: {pc.name}\n"
                     f"Spend: ${pc.spend:.2f}, Leads: {leads}\n"
                     f"Reason: {action.reason}"
@@ -240,7 +286,8 @@ class CampaignChecker:
 
         return "action" if success else "checked"
 
-    def _update_account_fb_ids(self, campaigns: list):
+    @staticmethod
+    def _update_account_fb_ids(db: DatabaseService, campaigns: list):
         """Update accounts with real FB ad account IDs extracted from campaign cab data."""
         fb_ids_by_panel_account: dict[int, str] = {}
         for pc in campaigns:
@@ -249,12 +296,13 @@ class CampaignChecker:
 
         for panel_id, fb_id in fb_ids_by_panel_account.items():
             clean_id = fb_id.replace("act_", "")
-            self.db.upsert_account_by_panel_id(panel_id, {"account_id": clean_id})
+            db.upsert_account_by_panel_id(panel_id, {"account_id": clean_id})
             logger.info(f"Updated account panel_id={panel_id} with real FB account ID: {clean_id}")
 
-    async def _sync_accounts_from_panel(self, today: str):
+    @staticmethod
+    async def _sync_accounts_from_panel(panel: PanelClient, db: DatabaseService, today: str):
         """Pull accounts from Panel API and upsert into DB."""
-        panel_accounts = await self.panel.get_accounts(
+        panel_accounts = await panel.get_accounts(
             start_date=today, end_date=today,
         )
         for pa in panel_accounts:
@@ -268,14 +316,15 @@ class CampaignChecker:
                 account_data["account_id"] = pa.fb_account_id
             else:
                 # Only set panel_XXXX fallback if account doesn't already have a real ID
-                existing = self.db.get_account_by_panel_id(pa.internal_id)
+                existing = db.get_account_by_panel_id(pa.internal_id)
                 if not existing or (existing.get("account_id", "").startswith("panel_")):
                     account_data["account_id"] = f"panel_{pa.internal_id}"
-            self.db.upsert_account_by_panel_id(pa.internal_id, account_data)
+            db.upsert_account_by_panel_id(pa.internal_id, account_data)
 
-    def _sync_campaign(self, pc: PanelCampaign, fb_account_id: str) -> dict:
+    @staticmethod
+    def _sync_campaign(db: DatabaseService, pc: PanelCampaign, fb_account_id: str) -> dict:
         """Sync Panel campaign data to DB, preserving 'stopped' status."""
-        existing = self.db.get_campaign_by_fb_ids(
+        existing = db.get_campaign_by_fb_ids(
             str(fb_account_id), str(pc.campaign_id),
         )
 
@@ -300,7 +349,7 @@ class CampaignChecker:
                 update_data["status"] = (
                     "active" if pc.effective_status == "ACTIVE" else "paused"
                 )
-            return self.db.update_campaign(existing["id"], update_data)
+            return db.update_campaign(existing["id"], update_data)
 
         # New campaign
         update_data.update({
@@ -308,7 +357,7 @@ class CampaignChecker:
             "fb_campaign_id": str(pc.campaign_id),
             "status": "active" if pc.effective_status == "ACTIVE" else "paused",
         })
-        return self.db.upsert_campaign(update_data)
+        return db.upsert_campaign(update_data)
 
 
 def _parse_dt(value) -> datetime | None:
