@@ -3,9 +3,6 @@ services:
     build: ./backend
     restart: unless-stopped
     env_file: ./backend/.env
-    environment:
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
     ports:
       - "8000:8000"
     healthcheck:
