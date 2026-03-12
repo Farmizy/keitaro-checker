@@ -15,11 +15,7 @@ router = APIRouter()
 async def list_accounts(
     db: DatabaseService = Depends(get_db_for_user),
 ):
-    logger.debug(f"list_accounts: user_id={db.user_id}")
     accounts = db.get_accounts()
-    logger.debug(f"list_accounts: got {len(accounts)} accounts")
-    if accounts:
-        logger.debug(f"list_accounts: first={accounts[0].get('name')}")
     return accounts
 
 
