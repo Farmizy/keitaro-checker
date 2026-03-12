@@ -29,6 +29,7 @@ class CampaignState:
     leads: int
     current_budget: float
     last_budget_change_at: datetime | None = None
+    link_clicks: int = 0
 
 
 # Default stop thresholds: (min_spend, max_leads_to_stop)
@@ -47,6 +48,8 @@ DEFAULT_BUDGET_STEPS: list[tuple[int, float]] = [
     (2, 75),
 ]
 
+CPC_STOP_SPEND = 2.5
+CPC_STOP_MAX = 0.45
 CPL_STOP_SPEND = 47.0
 CPL_STOP_MAX = 10.0
 MANUAL_REVIEW_LEADS = 7
@@ -58,6 +61,8 @@ def evaluate(
     now: datetime,
     stop_thresholds: list[tuple[float, int]] | None = None,
     budget_steps: list[tuple[int, float]] | None = None,
+    cpc_stop_spend: float = CPC_STOP_SPEND,
+    cpc_stop_max: float = CPC_STOP_MAX,
     cpl_stop_spend: float = CPL_STOP_SPEND,
     cpl_stop_max: float = CPL_STOP_MAX,
     manual_review_leads: int = MANUAL_REVIEW_LEADS,
@@ -75,6 +80,15 @@ def evaluate(
         stop_thresholds = DEFAULT_STOP_THRESHOLDS
     if budget_steps is None:
         budget_steps = DEFAULT_BUDGET_STEPS
+
+    # 0. CPC early-stop (high CPC = bad traffic, kill fast)
+    if state.link_clicks > 0 and state.spend >= cpc_stop_spend:
+        cpc = state.spend / state.link_clicks
+        if cpc > cpc_stop_max:
+            return Action(
+                type=ActionType.STOP,
+                reason=f"CPC ${cpc:.2f} > ${cpc_stop_max} at spend ${state.spend:.2f} ({state.link_clicks} clicks)",
+            )
 
     # 1. STOP checks (always, even during cooldown)
     for spend_limit, max_leads in stop_thresholds:

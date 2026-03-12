@@ -32,6 +32,7 @@ class PanelCampaign:
     spend: float
     spend_with_tax: float
     leads_fb: int  # FB-reported leads (we use Keitaro leads instead)
+    link_clicks: int  # Facebook link clicks
     account_name: str
     currency: str
     panel_account_id: int = 0  # Panel account ID (from account.id in campaign response)
@@ -159,6 +160,7 @@ class PanelClient:
                 spend=float(stats.get("spent", 0) or 0),
                 spend_with_tax=float(stats.get("spentWithTax", 0) or 0),
                 leads_fb=int(stats.get("lead", 0) or 0),
+                link_clicks=int(stats.get("linkClicks", 0) or 0),
                 account_name=account.get("name", ""),
                 currency=cab.get("currency", "USD"),
                 panel_account_id=int(account.get("id", 0) or 0),

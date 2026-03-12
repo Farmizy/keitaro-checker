@@ -206,6 +206,7 @@ class CampaignChecker:
             leads=leads,
             current_budget=pc.daily_budget,
             last_budget_change_at=_parse_dt(db_campaign.get("last_budget_change_at")),
+            link_clicks=pc.link_clicks,
         )
 
         action = evaluate(state, now)

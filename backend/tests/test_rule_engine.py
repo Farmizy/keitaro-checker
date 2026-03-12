@@ -11,13 +11,56 @@ from app.services.rule_engine import (
 NOW = datetime(2026, 3, 1, 12, 0, 0)
 
 
-def _state(spend=0.0, leads=0, budget=30.0, last_change=None):
+def _state(spend=0.0, leads=0, budget=30.0, last_change=None, link_clicks=0):
     return CampaignState(
         spend=spend,
         leads=leads,
         current_budget=budget,
         last_budget_change_at=last_change,
+        link_clicks=link_clicks,
     )
+
+
+# ── CPC early-stop ──────────────────────────────────────────
+
+
+class TestCpcEarlyStop:
+    def test_high_cpc_stops(self):
+        # spend=$3, 4 clicks → CPC=$0.75 > $0.45 → STOP
+        result = evaluate(_state(spend=3, leads=0, link_clicks=4), NOW)
+        assert result.type == ActionType.STOP
+        assert "CPC" in result.reason
+
+    def test_low_cpc_no_stop(self):
+        # spend=$3, 10 clicks → CPC=$0.30 < $0.45 → no stop
+        result = evaluate(_state(spend=3, leads=0, link_clicks=10), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_cpc_exact_threshold_no_stop(self):
+        # spend=$4.50, 10 clicks → CPC=$0.45, NOT > $0.45
+        result = evaluate(_state(spend=4.5, leads=0, link_clicks=10), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_cpc_below_spend_threshold(self):
+        # spend=$2, 2 clicks → CPC=$1.00 but spend < $2.50 → no CPC stop
+        result = evaluate(_state(spend=2, leads=0, link_clicks=2), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_cpc_zero_clicks_no_stop(self):
+        # 0 clicks → CPC check skipped
+        result = evaluate(_state(spend=3, leads=0, link_clicks=0), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_cpc_stop_has_priority(self):
+        # CPC stop fires before ladder stop thresholds
+        result = evaluate(_state(spend=3, leads=0, link_clicks=3), NOW)
+        assert result.type == ActionType.STOP
+        assert "CPC" in result.reason
+
+    def test_cpc_stop_during_cooldown(self):
+        last_change = NOW - timedelta(minutes=30)
+        result = evaluate(_state(spend=3, leads=0, link_clicks=3, last_change=last_change), NOW)
+        assert result.type == ActionType.STOP
 
 
 # ── STOP rules ──────────────────────────────────────────────
