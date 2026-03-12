@@ -128,6 +128,8 @@ class PanelClient:
         if items:
             first = items[0]
             logger.info(f"Panel campaigns - top-level keys: {list(first.keys())}")
+            logger.info(f"Panel campaigns - stats keys: {list(first.get('stats', {}).keys())}")
+            logger.info(f"Panel campaigns - stats: {first.get('stats')}")
             logger.info(f"Panel campaigns - cab: {first.get('cab')}")
             logger.info(f"Panel campaigns - account: {first.get('account')}")
 
