@@ -4,13 +4,20 @@ Uses session cookie auth (POST /admin/?object=auth.login).
 Ref: docs/api-reference-keitaro.md
 """
 
+import asyncio
+import time
 from typing import Any
 
 import httpx
 from loguru import logger
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import settings
+
+
+class KeitaroLoginBlocked(RuntimeError):
+    """Raised when Keitaro blocks login due to too many attempts."""
+    pass
 
 
 class KeitaroClient:
@@ -32,6 +39,8 @@ class KeitaroClient:
             },
         )
         self._session_id: str | None = None
+        self._reauth_attempted: bool = False  # prevent multiple re-auths per cycle
+        self._login_blocked_until: float = 0  # timestamp when block expires
 
     async def close(self):
         await self._http.aclose()
@@ -44,6 +53,14 @@ class KeitaroClient:
 
     async def authenticate(self) -> None:
         """Login and store session cookie."""
+        # Check if we're still in a login block period
+        now = time.monotonic()
+        if now < self._login_blocked_until:
+            wait_secs = int(self._login_blocked_until - now)
+            raise KeitaroLoginBlocked(
+                f"Keitaro login blocked, waiting {wait_secs}s before retry"
+            )
+
         # Clear any old cookies to get a fresh session
         self._http.cookies.clear()
 
@@ -56,12 +73,12 @@ class KeitaroClient:
 
         body = resp.json()
         logger.debug(f"Keitaro auth response: status={resp.status_code} body_keys={list(body.keys()) if isinstance(body, dict) else 'not_dict'}")
-        logger.debug(f"Keitaro auth cookies: {dict(resp.cookies)}")
-        logger.debug(f"Keitaro auth Set-Cookie: {resp.headers.get('set-cookie', 'NONE')}")
 
         # Check if login was successful by response body
         if isinstance(body, dict) and body.get("message", "").startswith("The attempts"):
-            raise RuntimeError(f"Keitaro login blocked: {body['message']}")
+            # Block further login attempts for 130 seconds (Keitaro blocks for 120s + buffer)
+            self._login_blocked_until = time.monotonic() + 130
+            raise KeitaroLoginBlocked(f"Keitaro login blocked: {body['message']}")
 
         # Extract session cookie
         session_id = resp.cookies.get("keitaro")
@@ -122,20 +139,26 @@ class KeitaroClient:
 
         logger.debug(f"Keitaro _request({object_action}): status={resp.status_code}")
 
-        # Log response body on auth failure for debugging
+        # Re-authenticate once on 401/403, but don't retry if already re-authed this cycle
         if resp.status_code in (401, 403):
-            logger.warning(
-                f"Keitaro: got {resp.status_code} for {object_action}, "
-                f"body={resp.text[:300]}, re-authenticating..."
-            )
-            await self.authenticate()
-            kwargs["cookies"] = {"keitaro": self._session_id}
-            resp = await self._http.request(method, f"{self.base_url}/admin/", **kwargs)
+            if self._reauth_attempted:
+                logger.error(
+                    f"Keitaro: got {resp.status_code} for {object_action} after re-auth, giving up"
+                )
+            else:
+                logger.warning(
+                    f"Keitaro: got {resp.status_code} for {object_action}, re-authenticating..."
+                )
+                self._reauth_attempted = True
+                self._session_id = None
+                await self.authenticate()
+                kwargs["cookies"] = {"keitaro": self._session_id}
+                resp = await self._http.request(method, f"{self.base_url}/admin/", **kwargs)
 
         resp.raise_for_status()
         return resp.json()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def get_conversions_by_ad(
         self,
         interval: str = "today",
@@ -181,13 +204,13 @@ class KeitaroClient:
 
     # --- Campaign Generator methods ---
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def get_offer_groups(self) -> list[dict]:
         """Get offer groups from Keitaro. Returns [{value: int, name: str}, ...]."""
         await self.ensure_authenticated()
         return await self._request("groups.listAsOptions", method="GET", extra_params={"type": "offers"})
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def get_offers(self, group_id: int | None = None) -> list[dict]:
         """Get list of offers from Keitaro, optionally filtered by group."""
         await self.ensure_authenticated()
@@ -196,7 +219,7 @@ class KeitaroClient:
             return [o for o in all_offers if o.get("group_id") == group_id]
         return all_offers
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def get_domains(self) -> list[dict]:
         """Get list of domains from Keitaro."""
         await self.ensure_authenticated()
@@ -245,7 +268,7 @@ class KeitaroClient:
                 return g["value"]
         return 0
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def create_campaign(self, name: str, domain: str, **kwargs: Any) -> dict:
         """Create a campaign in Keitaro. Returns dict with 'id' and 'alias'."""
         import secrets
@@ -280,7 +303,7 @@ class KeitaroClient:
         }
         return await self._request("campaigns.create", body)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def create_stream(
         self,
         campaign_id: int,
@@ -305,7 +328,7 @@ class KeitaroClient:
         }
         return await self._request("streams.create", body)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def create_kloaka_stream(self, campaign_id: int, geo: str) -> dict:
         """Create cloaking stream (redirect to google.com, bot/country filters)."""
         await self.ensure_authenticated()
@@ -362,7 +385,7 @@ class KeitaroClient:
         return all_conversions
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10),
-           retry=retry_if_exception_type(httpx.HTTPStatusError))
+           retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def get_campaign_stats_by_period(
         self,
         date_from: str,
@@ -448,7 +471,7 @@ class KeitaroClient:
 
         return all_stats
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), retry=retry_if_exception_type(httpx.HTTPStatusError) & retry_if_not_exception_type(KeitaroLoginBlocked))
     async def get_conversions_by_campaign(
         self,
         interval: str = "today",

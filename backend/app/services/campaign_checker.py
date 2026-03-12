@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from app.services.panel_client import PanelClient, PanelCampaign, TokenExpiredError
-from app.services.keitaro_client import KeitaroClient
+from app.services.keitaro_client import KeitaroClient, KeitaroLoginBlocked
 from app.services.database_service import DatabaseService
 from app.services.action_executor import ActionExecutor
 from app.services.rule_engine import evaluate, parse_db_rules, CampaignState, ActionType
@@ -121,6 +121,10 @@ class CampaignChecker:
                 await keitaro.ensure_authenticated()
                 keitaro_conversions = await keitaro.get_all_conversions_by_campaign()
                 logger.info(f"Got conversions for {len(keitaro_conversions)} campaign IDs from Keitaro")
+            except KeitaroLoginBlocked as e:
+                keitaro_available = False
+                logger.warning(f"Keitaro login blocked (rate limit), skipping: {e}")
+                # Don't spam Telegram on rate limit — it'll resolve itself in ~2 min
             except Exception as e:
                 keitaro_available = False
                 logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
