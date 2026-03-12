@@ -21,6 +21,10 @@ class KeitaroLoginBlocked(RuntimeError):
 
 
 class KeitaroClient:
+    # Class-level: shared across all instances (same Keitaro server)
+    _class_login_blocked_until: float = 0
+    _class_last_auth_time: float = 0  # when last successful auth happened
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -39,8 +43,7 @@ class KeitaroClient:
             },
         )
         self._session_id: str | None = None
-        self._reauth_attempted: bool = False  # prevent multiple re-auths per cycle
-        self._login_blocked_until: float = 0  # timestamp when block expires
+        self._reauth_attempted: bool = False
 
     async def close(self):
         await self._http.aclose()
@@ -53,10 +56,10 @@ class KeitaroClient:
 
     async def authenticate(self) -> None:
         """Login and store session cookie."""
-        # Check if we're still in a login block period
+        # Check class-level login block (shared across all instances)
         now = time.monotonic()
-        if now < self._login_blocked_until:
-            wait_secs = int(self._login_blocked_until - now)
+        if now < KeitaroClient._class_login_blocked_until:
+            wait_secs = int(KeitaroClient._class_login_blocked_until - now)
             raise KeitaroLoginBlocked(
                 f"Keitaro login blocked, waiting {wait_secs}s before retry"
             )
@@ -77,7 +80,7 @@ class KeitaroClient:
         # Check if login was successful by response body
         if isinstance(body, dict) and body.get("message", "").startswith("The attempts"):
             # Block further login attempts for 130 seconds (Keitaro blocks for 120s + buffer)
-            self._login_blocked_until = time.monotonic() + 130
+            KeitaroClient._class_login_blocked_until = time.monotonic() + 130
             raise KeitaroLoginBlocked(f"Keitaro login blocked: {body['message']}")
 
         # Extract session cookie
@@ -111,6 +114,7 @@ class KeitaroClient:
             raise RuntimeError("Keitaro login failed: no session cookie returned")
 
         self._session_id = session_id
+        KeitaroClient._class_last_auth_time = time.monotonic()
         logger.info(f"Keitaro: authenticated successfully (session={session_id[:8]}...)")
 
     async def _request(
@@ -139,11 +143,16 @@ class KeitaroClient:
 
         logger.debug(f"Keitaro _request({object_action}): status={resp.status_code}")
 
-        # Re-authenticate once on 401/403, but don't retry if already re-authed this cycle
+        # Re-authenticate once on 401/403, but skip if:
+        # - already re-authed this cycle
+        # - auth happened less than 60s ago (403 is likely permissions, not session)
         if resp.status_code in (401, 403):
-            if self._reauth_attempted:
+            secs_since_auth = time.monotonic() - KeitaroClient._class_last_auth_time
+            if self._reauth_attempted or secs_since_auth < 60:
                 logger.error(
-                    f"Keitaro: got {resp.status_code} for {object_action} after re-auth, giving up"
+                    f"Keitaro: got {resp.status_code} for {object_action}, "
+                    f"skip re-auth (reauth_attempted={self._reauth_attempted}, "
+                    f"secs_since_auth={secs_since_auth:.0f})"
                 )
             else:
                 logger.warning(
