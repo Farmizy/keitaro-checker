@@ -20,8 +20,8 @@ MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 NEW_CAMPAIGN_HOURS = 144
 # Max CPC ($/click) — campaigns with higher CPC are not relaunched
 MAX_CPC_FOR_RELAUNCH = 0.70
-# Max times a new campaign can be auto-launched
-MAX_LAUNCHES = 1
+# Max times a new campaign can be auto-launched (0 or 1 → ok, 2+ → skip)
+MAX_LAUNCHES = 2
 
 
 class AutoLauncher:
