@@ -16,8 +16,12 @@ from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
-# Threshold: if spend_7d / spend_2d < this ratio, campaign is "new"
-NEW_CAMPAIGN_SPEND_RATIO = 1.5
+# Campaign created within this window is considered "new"
+NEW_CAMPAIGN_HOURS = 144
+# Max CPC ($/click) — campaigns with higher CPC are not relaunched
+MAX_CPC_FOR_RELAUNCH = 0.70
+# Max times a new campaign can be auto-launched
+MAX_LAUNCHES = 1
 
 
 class AutoLauncher:
@@ -26,17 +30,13 @@ class AutoLauncher:
 
     @staticmethod
     def classify_campaign(
-        spend_2d: float,
-        spend_7d: float,
         leads_2d: int,
         roi_2d: float,
+        is_new: bool,
         settings: dict,
     ) -> str | None:
         """Pure classification logic. Returns 'new', 'proven', 'blacklist', or None."""
         min_roi = float(settings.get("min_roi_threshold", 0))
-
-        # Determine if campaign is new (1-2 days) or established
-        is_new = spend_7d <= 0 or spend_2d <= 0 or (spend_7d / spend_2d) < NEW_CAMPAIGN_SPEND_RATIO
 
         if is_new:
             # New campaign with leads and positive ROI → proven
@@ -147,20 +147,19 @@ class AutoLauncher:
                 effective_today = now.date()
 
             date_2d_from = (effective_today - timedelta(days=1)).strftime("%Y-%m-%d")
-            date_7d_from = (effective_today - timedelta(days=6)).strftime("%Y-%m-%d")
             date_to = effective_today.strftime("%Y-%m-%d")
 
             stats_2d = await keitaro.get_all_campaign_stats_by_period(
                 date_from=date_2d_from, date_to=date_to,
             )
-            stats_7d = await keitaro.get_all_campaign_stats_by_period(
-                date_from=date_7d_from, date_to=date_to,
-            )
 
-            # 4. Get blacklist and DB campaigns
+            # 4. Get blacklist, DB campaigns, and DB accounts (for auto-sync)
             blacklisted_ids = db.get_blacklisted_campaign_ids()
             db_campaigns_list = db.get_campaigns()
             db_campaigns = {c["fb_campaign_id"]: c for c in db_campaigns_list}
+
+            db_accounts = db.get_accounts()
+            db_account_by_name = {a["account_name"]: a for a in db_accounts}
 
             # 5. Classify each campaign
             queue_items = []
@@ -169,7 +168,7 @@ class AutoLauncher:
             logger.info(
                 f"Auto-launcher: {len(panel_campaigns)} panel campaigns, "
                 f"{len(db_campaigns)} DB campaigns, "
-                f"{len(stats_2d)} in stats_2d, {len(stats_7d)} in stats_7d, "
+                f"{len(stats_2d)} in stats_2d, "
                 f"{len(blacklisted_ids)} blacklisted"
             )
 
@@ -182,8 +181,21 @@ class AutoLauncher:
             for pc in panel_campaigns:
                 db_camp = db_campaigns.get(pc.campaign_id)
                 if not db_camp:
-                    skipped_reasons["not_in_db"] += 1
-                    continue
+                    # Auto-create campaign in DB if account is known
+                    db_acc = db_account_by_name.get(pc.account_name)
+                    if not db_acc:
+                        skipped_reasons["not_in_db"] += 1
+                        continue
+                    db_camp = db.upsert_campaign({
+                        "fb_account_id": db_acc["id"],
+                        "fb_campaign_id": str(pc.campaign_id),
+                        "panel_campaign_id": pc.internal_id,
+                        "fb_campaign_name": pc.name,
+                        "status": "active" if pc.effective_status == "ACTIVE" else "paused",
+                        "current_budget": pc.daily_budget,
+                    })
+                    db_campaigns[pc.campaign_id] = db_camp
+                    logger.info(f"Auto-synced new campaign to DB: {pc.name} (fb_id={pc.campaign_id})")
 
                 # Skip non-managed
                 if not db_camp.get("is_managed", True):
@@ -206,28 +218,54 @@ class AutoLauncher:
                     logger.debug(f"  skip error_account: {pc.name} (account={pc.account_name})")
                     continue
 
+                # Determine if campaign is "new" (created < 144h ago)
+                created_at = db_camp.get("created_at", "")
+                try:
+                    created_dt = datetime.fromisoformat(created_at)
+                    age_hours = (now - created_dt).total_seconds() / 3600
+                except (ValueError, TypeError):
+                    age_hours = 9999
+                is_new = age_hours < NEW_CAMPAIGN_HOURS
+
+                # For new campaigns: check launch count and CPC limits
+                if is_new:
+                    launch_count = db.count_campaign_launches(db_camp["id"])
+                    cpc = (pc.spend / pc.link_clicks) if pc.link_clicks > 0 else 0
+                    if launch_count >= MAX_LAUNCHES:
+                        skipped_reasons["classify_none"] += 1
+                        logger.debug(
+                            f"  skip max_launches: {pc.name} "
+                            f"(launched {launch_count}x, max {MAX_LAUNCHES})"
+                        )
+                        continue
+                    if cpc > MAX_CPC_FOR_RELAUNCH:
+                        skipped_reasons["classify_none"] += 1
+                        logger.debug(
+                            f"  skip high_cpc: {pc.name} "
+                            f"(cpc=${cpc:.2f} > ${MAX_CPC_FOR_RELAUNCH})"
+                        )
+                        continue
+
                 # Get Keitaro data
                 k2d = stats_2d.get(pc.campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
-                k7d = stats_7d.get(pc.campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
 
-                # Not in 2-day data → skip (recency filter)
-                if k2d["cost"] == 0 and pc.campaign_id not in stats_2d:
+                # Not in 2-day data → skip (recency filter), but allow new campaigns
+                if not is_new and k2d["cost"] == 0 and pc.campaign_id not in stats_2d:
                     skipped_reasons["no_keitaro_data"] += 1
                     logger.debug(f"  skip no_keitaro: {pc.name} (fb_id={pc.campaign_id})")
                     continue
 
                 launch_type = self.classify_campaign(
-                    spend_2d=k2d["cost"],
-                    spend_7d=k7d["cost"],
                     leads_2d=k2d["conversions"],
                     roi_2d=k2d["roi"],
+                    is_new=is_new,
                     settings=settings,
                 )
 
                 logger.debug(
                     f"  classify: {pc.name} → {launch_type} "
-                    f"(spend_2d={k2d['cost']}, spend_7d={k7d['cost']}, "
-                    f"leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
+                    f"(is_new={is_new}, age={age_hours:.0f}h, "
+                    f"spend_2d={k2d['cost']}, leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
                 )
 
                 if launch_type is None:
@@ -256,7 +294,6 @@ class AutoLauncher:
                         "roi_2d": k2d["roi"],
                         "leads_2d": k2d["conversions"],
                         "spend_2d": k2d["cost"],
-                        "spend_7d": k7d["cost"],
                     },
                     "status": "pending",
                     "launch_date": str(launch_date),

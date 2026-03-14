@@ -435,6 +435,17 @@ class DatabaseService:
         )
         return response.data[0] if response.data else None
 
+    def count_campaign_launches(self, campaign_id: str) -> int:
+        """Count how many times a campaign was launched (status='launched')."""
+        response = (
+            self.client.table("auto_launch_queue")
+            .select("id", count="exact")
+            .eq("campaign_id", campaign_id)
+            .eq("status", "launched")
+            .execute()
+        )
+        return response.count or 0
+
     def clear_old_launch_queue(self, before_date: str) -> None:
         """Delete all queue entries with launch_date before the given date
         (including stale pending items that were never launched)."""
