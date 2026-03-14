@@ -159,7 +159,7 @@ class AutoLauncher:
             db_campaigns = {c["fb_campaign_id"]: c for c in db_campaigns_list}
 
             db_accounts = db.get_accounts()
-            db_account_by_name = {a["account_name"]: a for a in db_accounts}
+            db_account_by_name = {a["name"]: a for a in db_accounts}
 
             # 5. Classify each campaign
             queue_items = []
