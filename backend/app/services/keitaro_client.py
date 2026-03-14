@@ -78,10 +78,14 @@ class KeitaroClient:
         logger.info(f"Keitaro auth response: status={resp.status_code} body={resp.text[:500]}")
 
         # Check if login was successful by response body
-        if isinstance(body, dict) and body.get("message", "").startswith("The attempts"):
-            # Block further login attempts for 130 seconds (Keitaro blocks for 120s + buffer)
-            KeitaroClient._class_login_blocked_until = time.monotonic() + 130
-            raise KeitaroLoginBlocked(f"Keitaro login blocked: {body['message']}")
+        if isinstance(body, dict):
+            msg = body.get("message", "")
+            if msg.startswith("The attempts"):
+                # Block further login attempts for 130 seconds (Keitaro blocks for 120s + buffer)
+                KeitaroClient._class_login_blocked_until = time.monotonic() + 130
+                raise KeitaroLoginBlocked(f"Keitaro login blocked: {msg}")
+            if "incorrect" in msg.lower() or "wrong" in msg.lower():
+                raise RuntimeError(f"Keitaro login failed: {msg}")
 
         # Extract session cookie
         session_id = resp.cookies.get("keitaro")
