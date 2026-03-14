@@ -436,10 +436,11 @@ class DatabaseService:
         return response.data[0] if response.data else None
 
     def clear_old_launch_queue(self, before_date: str) -> None:
+        """Delete all queue entries with launch_date before the given date
+        (including stale pending items that were never launched)."""
         self.client.table("auto_launch_queue") \
             .delete() \
             .lt("launch_date", before_date) \
-            .in_("status", ["launched", "skipped", "failed", "removed"]) \
             .execute()
 
     # --- Auto-Launch Blacklist ---
