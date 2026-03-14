@@ -131,9 +131,11 @@ class AutoLauncher:
                 else:
                     active_account_names[acc.name] = acc
 
-            # 2. Get all campaigns from Panel (no withSpent — need stopped ones too)
+            # 2. Get all campaigns from Panel — use wide date range to include
+            # campaigns that had no spend today but were active recently
+            wide_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
             panel_campaigns = await panel.get_all_campaigns(
-                start_date=today_str, end_date=today_str,
+                start_date=wide_start, end_date=today_str,
             )
 
             # 3. Get Keitaro stats: 2-day and 7-day
