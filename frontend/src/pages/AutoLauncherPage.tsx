@@ -22,8 +22,12 @@ export default function AutoLauncherPage() {
   const { data: status } = useAutoLauncherStatus()
   const { data: settings } = useAutoLaunchSettings()
   const updateSettings = useUpdateSettings()
-  // Show all queue items (no date filter — backend determines launch_date)
-  const { data: queue } = useLaunchQueue({})
+  // Show only pending/today+ queue items
+  const { data: rawQueue } = useLaunchQueue({})
+  const today = new Date().toISOString().slice(0, 10)
+  const queue = (rawQueue || []).filter(
+    (item) => item.launch_date >= today || item.status === "pending"
+  )
   const removeFromQueue = useRemoveFromQueue()
   const { data: blacklist } = useBlacklist()
   const removeFromBlacklist = useRemoveFromBlacklist()
