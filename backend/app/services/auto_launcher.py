@@ -42,11 +42,9 @@ class AutoLauncher:
             # New campaign with leads and positive ROI → proven
             if leads_2d > 0 and roi_2d > min_roi:
                 return "proven"
-            # New campaign, no leads yet → give another day
-            if leads_2d == 0:
-                return "new"
-            # New campaign, has leads but bad ROI
-            return None
+            # New campaign — always relaunch for testing
+            # (ladder rules will stop it if spend/CPL is too high)
+            return "new"
 
         # Established campaign
         if leads_2d == 0:
