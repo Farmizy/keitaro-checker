@@ -139,9 +139,16 @@ class AutoLauncher:
             # 3. Get Keitaro stats: 2-day and 7-day
             await keitaro.ensure_authenticated()
 
-            date_2d_from = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-            date_7d_from = (now - timedelta(days=6)).strftime("%Y-%m-%d")
-            date_to = now.strftime("%Y-%m-%d")
+            # If analysis runs after midnight but before launch_hour,
+            # "today" has almost no data — use yesterday as the end date
+            if now.hour < launch_hour:
+                effective_today = (now - timedelta(days=1)).date()
+            else:
+                effective_today = now.date()
+
+            date_2d_from = (effective_today - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_7d_from = (effective_today - timedelta(days=6)).strftime("%Y-%m-%d")
+            date_to = effective_today.strftime("%Y-%m-%d")
 
             stats_2d = await keitaro.get_all_campaign_stats_by_period(
                 date_from=date_2d_from, date_to=date_to,
