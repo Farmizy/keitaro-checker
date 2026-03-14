@@ -5,6 +5,7 @@ Multi-tenant: iterates over all users with configured credentials.
 """
 
 import asyncio
+import re
 import zoneinfo
 from datetime import datetime, timedelta
 from loguru import logger
@@ -16,12 +17,15 @@ from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
-# Campaign created within this window is considered "new"
-NEW_CAMPAIGN_HOURS = 144
+# Campaign created within this many days is considered "new"
+NEW_CAMPAIGN_DAYS = 6
 # Max CPC ($/click) — campaigns with higher CPC are not relaunched
 MAX_CPC_FOR_RELAUNCH = 0.70
 # Max times a new campaign can be auto-launched (0 or 1 → ok, 2+ → skip)
 MAX_LAUNCHES = 2
+
+# Pattern to extract date from campaign name like "13.03 v1 ..." or "13. 03 v1 ..."
+_NAME_DATE_RE = re.compile(r"^(\d{1,2})\.\s*(\d{2})\b")
 
 
 class AutoLauncher:
@@ -218,14 +222,20 @@ class AutoLauncher:
                     logger.debug(f"  skip error_account: {pc.name} (account={pc.account_name})")
                     continue
 
-                # Determine if campaign is "new" (created < 144h ago)
-                created_at = db_camp.get("created_at", "")
-                try:
-                    created_dt = datetime.fromisoformat(created_at)
-                    age_hours = (now - created_dt).total_seconds() / 3600
-                except (ValueError, TypeError):
-                    age_hours = 9999
-                is_new = age_hours < NEW_CAMPAIGN_HOURS
+                # Determine if campaign is "new" by date in name (e.g. "13.03")
+                m = _NAME_DATE_RE.match(pc.name)
+                if m:
+                    day, month = int(m.group(1)), int(m.group(2))
+                    try:
+                        campaign_date = now.replace(
+                            month=month, day=day, hour=0, minute=0, second=0, microsecond=0,
+                        )
+                        age_days = (now - campaign_date).days
+                    except ValueError:
+                        age_days = 9999
+                else:
+                    age_days = 9999
+                is_new = 0 <= age_days < NEW_CAMPAIGN_DAYS
 
                 # For new campaigns: check launch count and CPC limits
                 if is_new:
@@ -264,7 +274,7 @@ class AutoLauncher:
 
                 logger.debug(
                     f"  classify: {pc.name} → {launch_type} "
-                    f"(is_new={is_new}, age={age_hours:.0f}h, "
+                    f"(is_new={is_new}, age={age_days}d, "
                     f"spend_2d={k2d['cost']}, leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
                 )
 
