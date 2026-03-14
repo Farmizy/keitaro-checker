@@ -470,6 +470,9 @@ class AutoLauncher:
                     launched += 1
                     logger.info(f"Auto-launched: {item['fb_campaign_name']} (${target_budget})")
 
+                    # Delay between launches to avoid FB rate limits
+                    await asyncio.sleep(30)
+
                 except Exception as e:
                     failed += 1
                     logger.error(f"Failed to launch {item['fb_campaign_name']}: {e}")
