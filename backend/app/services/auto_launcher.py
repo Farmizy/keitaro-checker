@@ -106,10 +106,17 @@ class AutoLauncher:
         """Analyze campaigns and build launch queue for a single user."""
         try:
             now = datetime.now(MOSCOW_TZ)
-            tomorrow = (now + timedelta(days=1)).date()
+            launch_hour = int(settings.get("launch_hour", 4))
+
+            # If current time is before launch hour → launch today at launch_hour
+            # If current time is after launch hour → launch tomorrow at launch_hour
+            if now.hour < launch_hour:
+                launch_date = now.date()
+            else:
+                launch_date = (now + timedelta(days=1)).date()
 
             # Clear old queue entries
-            db.clear_old_launch_queue(str(tomorrow))
+            db.clear_old_launch_queue(str(launch_date))
 
             # 1. Get accounts and filter ERROR/CHECKPOINT
             today_str = now.strftime("%Y-%m-%d")
@@ -245,7 +252,7 @@ class AutoLauncher:
                         "spend_7d": k7d["cost"],
                     },
                     "status": "pending",
-                    "launch_date": str(tomorrow),
+                    "launch_date": str(launch_date),
                 })
 
             logger.info(f"Auto-launcher skip reasons: {skipped_reasons}")
@@ -257,12 +264,12 @@ class AutoLauncher:
             # 7. Send Telegram notification
             if notifier:
                 await self._send_analysis_telegram(
-                    notifier, queue_items, error_accounts, blacklisted_count, tomorrow,
+                    notifier, queue_items, error_accounts, blacklisted_count, launch_date,
                 )
 
             logger.info(
                 f"Auto-launcher analysis: {len(queue_items)} queued, "
-                f"{blacklisted_count} blacklisted for {tomorrow}"
+                f"{blacklisted_count} blacklisted for {launch_date}"
             )
 
         except TokenExpiredError:

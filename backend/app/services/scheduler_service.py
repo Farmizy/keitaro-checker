@@ -53,14 +53,14 @@ class SchedulerService:
     ):
         self.scheduler.add_job(
             self.auto_launcher.run_analysis,
-            CronTrigger(hour=analysis_hour, minute=analysis_minute),
+            CronTrigger(hour=analysis_hour, minute=analysis_minute, timezone=MOSCOW_TZ),
             id=self.ANALYSIS_JOB_ID,
             max_instances=1,
             replace_existing=True,
         )
         self.scheduler.add_job(
             self.auto_launcher.run_launch,
-            CronTrigger(hour=launch_hour, minute=launch_minute),
+            CronTrigger(hour=launch_hour, minute=launch_minute, timezone=MOSCOW_TZ),
             id=self.LAUNCH_JOB_ID,
             max_instances=1,
             replace_existing=True,

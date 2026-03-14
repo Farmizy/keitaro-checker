@@ -22,13 +22,8 @@ export default function AutoLauncherPage() {
   const { data: status } = useAutoLauncherStatus()
   const { data: settings } = useAutoLaunchSettings()
   const updateSettings = useUpdateSettings()
-  // Analysis creates queue for tomorrow, so show tomorrow's queue
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
-  const today = new Date().toISOString().slice(0, 10)
-  const { data: queueTomorrow } = useLaunchQueue({ launch_date: tomorrow })
-  const { data: queueToday } = useLaunchQueue({ launch_date: today })
-  const queue = (queueTomorrow?.length ? queueTomorrow : queueToday) || []
-  const queueDate = queueTomorrow?.length ? tomorrow : today
+  // Show all queue items (no date filter — backend determines launch_date)
+  const { data: queue } = useLaunchQueue({})
   const removeFromQueue = useRemoveFromQueue()
   const { data: blacklist } = useBlacklist()
   const removeFromBlacklist = useRemoveFromBlacklist()
@@ -58,7 +53,7 @@ export default function AutoLauncherPage() {
       />
 
       {/* Queue */}
-      <QueueCard queue={queue} queueDate={queueDate} onRemove={(id) => removeFromQueue.mutate(id)} />
+      <QueueCard queue={queue} onRemove={(id) => removeFromQueue.mutate(id)} />
 
       {/* Blacklist */}
       <BlacklistCard blacklist={blacklist} onRemove={(id) => removeFromBlacklist.mutate(id)} />
@@ -145,11 +140,9 @@ function StatusCard({
 
 function QueueCard({
   queue,
-  queueDate,
   onRemove,
 }: {
   queue: ReturnType<typeof useLaunchQueue>["data"]
-  queueDate: string
   onRemove: (id: string) => void
 }) {
   const statusVariant = (s: string) => {
@@ -166,7 +159,7 @@ function QueueCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Queue — {queueDate}</CardTitle>
+        <CardTitle className="text-base">Launch Queue</CardTitle>
       </CardHeader>
       <CardContent>
         {!queue?.length ? (
@@ -180,6 +173,7 @@ function QueueCard({
                 <TableHead>Budget</TableHead>
                 <TableHead>ROI 2d</TableHead>
                 <TableHead>Leads 2d</TableHead>
+                <TableHead>Launch</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead></TableHead>
               </TableRow>
@@ -200,6 +194,7 @@ function QueueCard({
                     {item.analysis_data?.roi_2d != null ? `${item.analysis_data.roi_2d.toFixed(0)}%` : "—"}
                   </TableCell>
                   <TableCell className="text-xs">{item.analysis_data?.leads_2d ?? "—"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{item.launch_date}</TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(item.status)} className="capitalize">
                       {item.status}
