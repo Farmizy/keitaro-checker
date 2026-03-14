@@ -5,7 +5,6 @@ Multi-tenant: iterates over all users with configured credentials.
 """
 
 import asyncio
-import re
 import zoneinfo
 from datetime import datetime, timedelta
 from loguru import logger
@@ -17,15 +16,10 @@ from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
-# Campaign created within this many days is considered "new"
-NEW_CAMPAIGN_DAYS = 6
 # Max CPC ($/click) — campaigns with higher CPC are not relaunched
 MAX_CPC_FOR_RELAUNCH = 0.70
 # Max times a new campaign can be auto-launched (0 or 1 → ok, 2+ → skip)
 MAX_LAUNCHES = 2
-
-# Pattern to extract date from campaign name like "13.03 v1 ..." or "13. 03 v1 ..."
-_NAME_DATE_RE = re.compile(r"^(\d{1,2})\.\s*(\d{2})\b")
 
 
 class AutoLauncher:
@@ -117,8 +111,9 @@ class AutoLauncher:
             else:
                 launch_date = (now + timedelta(days=1)).date()
 
-            # Clear old queue entries
+            # Clear old and stale pending queue entries
             db.clear_old_launch_queue(str(launch_date))
+            db.clear_pending_queue()
 
             # 1. Get accounts and filter ERROR/CHECKPOINT
             today_str = now.strftime("%Y-%m-%d")
@@ -140,21 +135,28 @@ class AutoLauncher:
                 start_date=wide_start, end_date=today_str,
             )
 
-            # 3. Get Keitaro stats: 2-day and 7-day
+            # 3. Get Keitaro stats
             await keitaro.ensure_authenticated()
 
             # If analysis runs after midnight but before launch_hour,
             # "today" has almost no data — use yesterday as the end date
             if now.hour < launch_hour:
                 effective_today = (now - timedelta(days=1)).date()
+                recent_days = 4  # after midnight: 4 days window
             else:
                 effective_today = now.date()
+                recent_days = 3  # normal: 3 days window
 
             date_2d_from = (effective_today - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_recent_from = (effective_today - timedelta(days=recent_days - 1)).strftime("%Y-%m-%d")
             date_to = effective_today.strftime("%Y-%m-%d")
 
             stats_2d = await keitaro.get_all_campaign_stats_by_period(
                 date_from=date_2d_from, date_to=date_to,
+            )
+            # Recent stats to determine "new" campaigns (3 or 4 days)
+            stats_recent = await keitaro.get_all_campaign_stats_by_period(
+                date_from=date_recent_from, date_to=date_to,
             )
 
             # 4. Get blacklist, DB campaigns, and DB accounts (for auto-sync)
@@ -222,20 +224,8 @@ class AutoLauncher:
                     logger.debug(f"  skip error_account: {pc.name} (account={pc.account_name})")
                     continue
 
-                # Determine if campaign is "new" by date in name (e.g. "13.03")
-                m = _NAME_DATE_RE.match(pc.name)
-                if m:
-                    day, month = int(m.group(1)), int(m.group(2))
-                    try:
-                        campaign_date = now.replace(
-                            month=month, day=day, hour=0, minute=0, second=0, microsecond=0,
-                        )
-                        age_days = (now - campaign_date).days
-                    except ValueError:
-                        age_days = 9999
-                else:
-                    age_days = 9999
-                is_new = 0 <= age_days < NEW_CAMPAIGN_DAYS
+                # Campaign is "new" if it has data in Keitaro recent window
+                is_new = pc.campaign_id in stats_recent
 
                 # For new campaigns: check launch count and CPC limits
                 if is_new:
@@ -274,7 +264,7 @@ class AutoLauncher:
 
                 logger.debug(
                     f"  classify: {pc.name} → {launch_type} "
-                    f"(is_new={is_new}, age={age_days}d, "
+                    f"(is_new={is_new}, "
                     f"spend_2d={k2d['cost']}, leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
                 )
 

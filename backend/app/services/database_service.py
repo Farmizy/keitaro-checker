@@ -454,6 +454,17 @@ class DatabaseService:
             .lt("launch_date", before_date) \
             .execute()
 
+    def clear_pending_queue(self) -> None:
+        """Delete all pending queue entries (before re-analysis)."""
+        query = self.client.table("auto_launch_queue") \
+            .delete() \
+            .eq("status", "pending")
+        if self.user_id:
+            account_ids = self._get_user_account_ids()
+            if account_ids:
+                query = query.in_("fb_account_id", account_ids)
+        query.execute()
+
     # --- Auto-Launch Blacklist ---
 
     def get_blacklist(self) -> list[dict]:
