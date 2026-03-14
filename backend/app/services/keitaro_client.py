@@ -75,7 +75,7 @@ class KeitaroClient:
         resp.raise_for_status()
 
         body = resp.json()
-        logger.debug(f"Keitaro auth response: status={resp.status_code} body_keys={list(body.keys()) if isinstance(body, dict) else 'not_dict'}")
+        logger.info(f"Keitaro auth response: status={resp.status_code} body={resp.text[:500]}")
 
         # Check if login was successful by response body
         if isinstance(body, dict) and body.get("message", "").startswith("The attempts"):
@@ -148,6 +148,9 @@ class KeitaroClient:
         # - auth happened less than 60s ago (403 is likely permissions, not session)
         if resp.status_code in (401, 403):
             secs_since_auth = time.monotonic() - KeitaroClient._class_last_auth_time
+            logger.error(
+                f"Keitaro: {resp.status_code} response body: {resp.text[:500]}"
+            )
             if self._reauth_attempted or secs_since_auth < 60:
                 logger.error(
                     f"Keitaro: got {resp.status_code} for {object_action}, "
