@@ -110,6 +110,10 @@ class AutoLauncher:
                 launch_date = now.date()
             else:
                 launch_date = (now + timedelta(days=1)).date()
+            logger.info(
+                f"Auto-launcher: now={now.isoformat()}, hour={now.hour}, "
+                f"launch_hour={launch_hour}, launch_date={launch_date}"
+            )
 
             # Clear old and stale pending queue entries
             db.clear_old_launch_queue(str(launch_date))
@@ -368,6 +372,7 @@ class AutoLauncher:
             today = now.strftime("%Y-%m-%d")
 
             queue = db.get_launch_queue(launch_date=today, status="pending")
+            logger.info(f"Auto-launcher launch: now={now.isoformat()}, looking for launch_date={today}")
             if not queue:
                 logger.info("Auto-launcher: no campaigns to launch today")
                 return
