@@ -21,6 +21,42 @@ def _state(spend=0.0, leads=0, budget=30.0, last_change=None, link_clicks=0):
     )
 
 
+# ── CPC early-stop (only with 0 leads) ──────────────────────
+
+
+class TestCpcEarlyStop:
+    def test_high_cpc_stops_with_0_leads(self):
+        # spend=$3, 4 clicks, 0 leads → CPC=$0.75 > $0.45 → STOP
+        result = evaluate(_state(spend=3, leads=0, link_clicks=4), NOW)
+        assert result.type == ActionType.STOP
+        assert "CPC" in result.reason
+
+    def test_high_cpc_ignored_with_leads(self):
+        # spend=$3, 4 clicks, 1 lead → CPC=$0.75 but has leads → no CPC stop
+        result = evaluate(_state(spend=3, leads=1, link_clicks=4), NOW)
+        assert result.type != ActionType.STOP or "CPC" not in result.reason
+
+    def test_high_cpc_ignored_with_many_leads(self):
+        # spend=$10, 5 clicks, 3 leads → CPC=$2 but has leads → continue ladder
+        result = evaluate(_state(spend=10, leads=3, link_clicks=5, budget=30), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_low_cpc_no_stop(self):
+        # spend=$3, 10 clicks → CPC=$0.30 < $0.45 → no stop
+        result = evaluate(_state(spend=3, leads=0, link_clicks=10), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_cpc_below_spend_threshold(self):
+        # spend=$2, 2 clicks → CPC=$1.00 but spend < $2.50 → no CPC stop
+        result = evaluate(_state(spend=2, leads=0, link_clicks=2), NOW)
+        assert result.type != ActionType.STOP
+
+    def test_cpc_zero_clicks_no_stop(self):
+        # 0 clicks → CPC check skipped
+        result = evaluate(_state(spend=3, leads=0, link_clicks=0), NOW)
+        assert result.type != ActionType.STOP
+
+
 # ── STOP rules ──────────────────────────────────────────────
 
 
