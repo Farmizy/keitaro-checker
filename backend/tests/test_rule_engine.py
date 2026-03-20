@@ -21,48 +21,6 @@ def _state(spend=0.0, leads=0, budget=30.0, last_change=None, link_clicks=0):
     )
 
 
-# ── CPC early-stop ──────────────────────────────────────────
-
-
-class TestCpcEarlyStop:
-    def test_high_cpc_stops(self):
-        # spend=$3, 4 clicks → CPC=$0.75 > $0.45 → STOP
-        result = evaluate(_state(spend=3, leads=0, link_clicks=4), NOW)
-        assert result.type == ActionType.STOP
-        assert "CPC" in result.reason
-
-    def test_low_cpc_no_stop(self):
-        # spend=$3, 10 clicks → CPC=$0.30 < $0.45 → no stop
-        result = evaluate(_state(spend=3, leads=0, link_clicks=10), NOW)
-        assert result.type != ActionType.STOP
-
-    def test_cpc_exact_threshold_no_stop(self):
-        # spend=$4.50, 10 clicks → CPC=$0.45, NOT > $0.45
-        result = evaluate(_state(spend=4.5, leads=0, link_clicks=10), NOW)
-        assert result.type != ActionType.STOP
-
-    def test_cpc_below_spend_threshold(self):
-        # spend=$2, 2 clicks → CPC=$1.00 but spend < $2.50 → no CPC stop
-        result = evaluate(_state(spend=2, leads=0, link_clicks=2), NOW)
-        assert result.type != ActionType.STOP
-
-    def test_cpc_zero_clicks_no_stop(self):
-        # 0 clicks → CPC check skipped
-        result = evaluate(_state(spend=3, leads=0, link_clicks=0), NOW)
-        assert result.type != ActionType.STOP
-
-    def test_cpc_stop_has_priority(self):
-        # CPC stop fires before ladder stop thresholds
-        result = evaluate(_state(spend=3, leads=0, link_clicks=3), NOW)
-        assert result.type == ActionType.STOP
-        assert "CPC" in result.reason
-
-    def test_cpc_stop_during_cooldown(self):
-        last_change = NOW - timedelta(minutes=30)
-        result = evaluate(_state(spend=3, leads=0, link_clicks=3, last_change=last_change), NOW)
-        assert result.type == ActionType.STOP
-
-
 # ── STOP rules ──────────────────────────────────────────────
 
 
@@ -103,6 +61,12 @@ class TestStopRules:
         result = evaluate(_state(spend=48, leads=6), NOW)
         assert result.type != ActionType.STOP
 
+    def test_cpl_stop_with_many_leads(self):
+        # spend=100, leads=8 → CPL=12.5 > 10 → STOP
+        result = evaluate(_state(spend=100, leads=8), NOW)
+        assert result.type == ActionType.STOP
+        assert "CPL" in result.reason
+
     def test_stop_works_during_cooldown(self):
         last_change = NOW - timedelta(minutes=30)
         result = evaluate(_state(spend=7, leads=0, last_change=last_change), NOW)
@@ -118,21 +82,39 @@ class TestStopRules:
         assert result.type == ActionType.STOP
 
 
-# ── Manual review ────────────────────────────────────────────
+# ── Budget cap (formerly manual review) ─────────────────────
 
 
-class TestManualReview:
-    def test_7_leads(self):
+class TestBudgetCap:
+    def test_7_leads_returns_wait(self):
+        # 7+ leads → WAIT (no more budget increases), NOT manual_review
         result = evaluate(_state(spend=48, leads=7), NOW)
-        assert result.type == ActionType.MANUAL_REVIEW
+        assert result.type == ActionType.WAIT
+        assert "capped" in result.reason
 
-    def test_10_leads(self):
+    def test_10_leads_returns_wait(self):
         result = evaluate(_state(spend=50, leads=10), NOW)
-        assert result.type == ActionType.MANUAL_REVIEW
+        assert result.type == ActionType.WAIT
 
-    def test_7_leads_even_with_low_spend(self):
+    def test_7_leads_low_spend_returns_wait(self):
         result = evaluate(_state(spend=5, leads=7), NOW)
-        assert result.type == ActionType.MANUAL_REVIEW
+        assert result.type == ActionType.WAIT
+
+    def test_7_leads_high_cpl_stops(self):
+        # spend=80, leads=7 → CPL=11.4 > 10 → STOP (not wait)
+        result = evaluate(_state(spend=80, leads=7), NOW)
+        assert result.type == ActionType.STOP
+        assert "CPL" in result.reason
+
+    def test_cpl_stop_takes_priority_over_cap(self):
+        # spend=100, leads=8 → CPL=12.5 > 10 → STOP even though 8 >= 7
+        result = evaluate(_state(spend=100, leads=8), NOW)
+        assert result.type == ActionType.STOP
+
+    def test_7_leads_good_cpl_just_waits(self):
+        # spend=49, leads=7 → CPL=7 < 10 → WAIT (budget capped)
+        result = evaluate(_state(spend=49, leads=7), NOW)
+        assert result.type == ActionType.WAIT
 
 
 # ── Budget increase ──────────────────────────────────────────
@@ -208,10 +190,11 @@ class TestCooldown:
         result = evaluate(_state(spend=7, leads=0, last_change=last_change), NOW)
         assert result.type == ActionType.STOP
 
-    def test_does_not_block_manual_review(self):
+    def test_does_not_block_budget_cap(self):
         last_change = NOW - timedelta(minutes=30)
         result = evaluate(_state(spend=5, leads=7, last_change=last_change), NOW)
-        assert result.type == ActionType.MANUAL_REVIEW
+        assert result.type == ActionType.WAIT
+        assert "capped" in result.reason
 
 
 # ── Wait (no action) ────────────────────────────────────────

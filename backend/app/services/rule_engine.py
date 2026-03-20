@@ -48,8 +48,6 @@ DEFAULT_BUDGET_STEPS: list[tuple[int, float]] = [
     (2, 75),
 ]
 
-CPC_STOP_SPEND = 2.5
-CPC_STOP_MAX = 0.45
 CPL_STOP_SPEND = 47.0
 CPL_STOP_MAX = 10.0
 MANUAL_REVIEW_LEADS = 7
@@ -113,8 +111,6 @@ def evaluate(
     now: datetime,
     stop_thresholds: list[tuple[float, int]] | None = None,
     budget_steps: list[tuple[int, float]] | None = None,
-    cpc_stop_spend: float = CPC_STOP_SPEND,
-    cpc_stop_max: float = CPC_STOP_MAX,
     cpl_stop_spend: float = CPL_STOP_SPEND,
     cpl_stop_max: float = CPL_STOP_MAX,
     manual_review_leads: int = MANUAL_REVIEW_LEADS,
@@ -133,15 +129,6 @@ def evaluate(
     if budget_steps is None:
         budget_steps = DEFAULT_BUDGET_STEPS
 
-    # 0. CPC early-stop (high CPC = bad traffic, kill fast)
-    if state.link_clicks > 0 and state.spend >= cpc_stop_spend:
-        cpc = state.spend / state.link_clicks
-        if cpc > cpc_stop_max:
-            return Action(
-                type=ActionType.STOP,
-                reason=f"CPC ${cpc:.2f} > ${cpc_stop_max} at spend ${state.spend:.2f} ({state.link_clicks} clicks)",
-            )
-
     # 1. STOP checks (always, even during cooldown)
     for spend_limit, max_leads in stop_thresholds:
         if state.spend >= spend_limit and state.leads <= max_leads:
@@ -150,8 +137,8 @@ def evaluate(
                 reason=f"spend ${state.spend:.0f} >= ${spend_limit} with {state.leads} leads (max {max_leads})",
             )
 
-    # CPL stop
-    if state.spend >= cpl_stop_spend and state.leads >= 5:
+    # CPL stop — at any spend level, if leads exist and CPL > max
+    if state.leads > 0 and state.spend >= cpl_stop_spend:
         cpl = state.spend / state.leads
         if cpl > cpl_stop_max:
             return Action(
@@ -159,11 +146,11 @@ def evaluate(
                 reason=f"CPL ${cpl:.2f} > ${cpl_stop_max} at spend ${state.spend:.0f}",
             )
 
-    # 2. Manual review for 7+ leads
+    # 2. Cap at manual_review_leads — no more budget increases, just hold
     if state.leads >= manual_review_leads:
         return Action(
-            type=ActionType.MANUAL_REVIEW,
-            reason=f"{state.leads} leads — manual review needed",
+            type=ActionType.WAIT,
+            reason=f"{state.leads} leads >= {manual_review_leads} — budget capped, no further increases",
         )
 
     # 3. Cooldown check (only blocks budget changes)
