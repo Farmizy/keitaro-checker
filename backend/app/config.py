@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
 
     # Scheduler
-    check_interval_minutes: int = 20
+    check_interval_minutes: int = 10
 
     # CORS
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
