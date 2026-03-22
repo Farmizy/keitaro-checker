@@ -74,7 +74,10 @@ class ActionExecutor:
         try:
             success = await self.fbtool.stop_campaign(fbtool_account_id, fb_campaign_id)
             if success:
-                self.db.update_campaign(campaign_db_id, {"status": "stopped"})
+                self.db.update_campaign(campaign_db_id, {
+                    "status": "stopped",
+                    "stopped_at": datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).isoformat(),
+                })
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Failed to stop campaign {fb_campaign_id}: {e}")

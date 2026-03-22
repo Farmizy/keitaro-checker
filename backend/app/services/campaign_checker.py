@@ -351,12 +351,21 @@ class CampaignChecker:
 
         if existing:
             if existing.get("status") == "stopped" and fc.effective_status == "ACTIVE":
-                # Campaign was stopped by system but manually restarted in FB
-                logger.info(
-                    f"Campaign {fc.name} ({fc.fb_campaign_id}) was stopped but "
-                    f"restarted in FB — unlocking to active"
-                )
-                update_data["status"] = "active"
+                # Only unlock if stopped more than 60 min ago (fbtool stop takes time to propagate)
+                stopped_at = _parse_dt(existing.get("stopped_at"))
+                now = datetime.now(timezone.utc)
+                if stopped_at and (now - stopped_at).total_seconds() < 3600:
+                    logger.debug(
+                        f"Campaign {fc.name}: stopped {int((now - stopped_at).total_seconds() // 60)}m ago, "
+                        f"keeping stopped (fbtool still shows ACTIVE)"
+                    )
+                else:
+                    # Campaign was stopped by system but manually restarted in FB
+                    logger.info(
+                        f"Campaign {fc.name} ({fc.fb_campaign_id}) was stopped but "
+                        f"restarted in FB — unlocking to active"
+                    )
+                    update_data["status"] = "active"
             elif existing.get("status") != "stopped":
                 update_data["status"] = (
                     "active" if fc.effective_status == "ACTIVE" else "paused"
