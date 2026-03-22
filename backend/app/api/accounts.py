@@ -3,10 +3,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
-from app.core.auth import get_db_for_user, get_user_panel_client
+from app.core.auth import get_db_for_user, get_user_fbtool_client
 from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse
 from app.services.database_service import DatabaseService
-from app.services.panel_client import PanelClient
+from app.services.fbtool_client import FbtoolClient
 
 router = APIRouter()
 
@@ -22,32 +22,28 @@ async def list_accounts(
 @router.post("/sync")
 async def sync_accounts(
     db: DatabaseService = Depends(get_db_for_user),
-    panel: PanelClient = Depends(get_user_panel_client),
+    fbtool: FbtoolClient = Depends(get_user_fbtool_client),
 ):
-    """Sync accounts from 2KK Panel API into local DB."""
-    from datetime import datetime
-    import zoneinfo
+    """Sync accounts from fbtool.pro into local DB."""
+    try:
+        fbtool_accounts = await fbtool.get_accounts()
 
-    now = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
-    today = now.strftime("%Y-%m-%d")
+        synced = 0
+        for fa in fbtool_accounts:
+            account_data = {
+                "name": fa.name,
+                "fbtool_account_id": fa.fbtool_id,
+                "is_active": fa.token_status != "Ошибка",
+            }
+            if fa.primary_ad_account_id:
+                account_data["account_id"] = fa.primary_ad_account_id
+            db.upsert_account_by_fbtool_id(fa.fbtool_id, account_data)
+            synced += 1
 
-    panel_accounts = await panel.get_accounts(
-        start_date=today, end_date=today,
-    )
-
-    synced = 0
-    for pa in panel_accounts:
-        account_id = pa.fb_account_id or f"panel_{pa.internal_id}"
-        db.upsert_account_by_panel_id(pa.internal_id, {
-            "name": pa.name,
-            "account_id": account_id,
-            "panel_account_id": pa.internal_id,
-            "is_active": True,
-        })
-        synced += 1
-
-    logger.info(f"Synced {synced} accounts from Panel API")
-    return {"synced": synced, "total": len(panel_accounts)}
+        logger.info(f"Synced {synced} accounts from fbtool.pro")
+        return {"synced": synced, "total": len(fbtool_accounts)}
+    finally:
+        await fbtool.close()
 
 
 @router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)

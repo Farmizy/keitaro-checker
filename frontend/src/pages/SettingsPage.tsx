@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useSchedulerStatus } from "@/hooks/useScheduler"
-import { getSettings, updateSettings, testKeitaro, testPanel, testTelegram, type UserSettingsUpdate } from "@/api/settings"
+import { getSettings, updateSettings, testKeitaro, testFbtool, testTelegram, type UserSettingsUpdate } from "@/api/settings"
 
 function StatusBadge({ configured }: { configured: boolean }) {
   return configured ? (
@@ -88,8 +88,8 @@ export default function SettingsPage() {
         keitaro_url: settings.keitaro_url,
         keitaro_login: settings.keitaro_login,
         keitaro_password: settings.keitaro_password,
-        panel_api_url: settings.panel_api_url,
-        panel_jwt: settings.panel_jwt,
+        fbtool_cookies: settings.fbtool_cookies,
+        fbtool_account_ids: settings.fbtool_account_ids,
         telegram_bot_token: settings.telegram_bot_token,
         telegram_chat_id: settings.telegram_chat_id,
       })
@@ -171,26 +171,37 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Panel API (2KK)</CardTitle>
-          <StatusBadge configured={settings?.panel_configured ?? false} />
+          <CardTitle className="text-base">fbtool.pro</CardTitle>
+          <StatusBadge configured={settings?.fbtool_configured ?? false} />
         </CardHeader>
         <CardContent className="space-y-4">
           <SettingsField
-            label="API URL"
-            description="URL API вашей панели"
-            value={form.panel_api_url ?? ""}
-            onChange={set("panel_api_url")}
-            placeholder="https://fbm.adway.team/api"
-          />
-          <SettingsField
-            label="JWT Token"
-            description="JWT токен из панели (Профиль → API Token)"
-            value={form.panel_jwt ?? ""}
-            onChange={set("panel_jwt")}
+            label="Cookies"
+            description="Cookies из браузера: _identity=XXX; PHPSESSID=YYY; _csrf=ZZZ"
+            value={form.fbtool_cookies ?? ""}
+            onChange={set("fbtool_cookies")}
             type="password"
+            placeholder="_identity=...; PHPSESSID=...; _csrf=..."
           />
-          {settings?.panel_configured && (
-            <TestButton testFn={testPanel} label="Проверить Panel" />
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Account IDs</label>
+            <Input
+              value={(form.fbtool_account_ids ?? []).join(", ")}
+              onChange={(e) => {
+                const ids = e.target.value
+                  .split(",")
+                  .map((s) => parseInt(s.trim(), 10))
+                  .filter((n) => !isNaN(n))
+                setForm((prev) => ({ ...prev, fbtool_account_ids: ids }))
+              }}
+              placeholder="18856714, 18863836, 18863846"
+            />
+            <p className="text-xs text-muted-foreground">
+              ID аккаунтов fbtool через запятую (из /accounts)
+            </p>
+          </div>
+          {settings?.fbtool_configured && (
+            <TestButton testFn={testFbtool} label="Проверить fbtool" />
           )}
         </CardContent>
       </Card>

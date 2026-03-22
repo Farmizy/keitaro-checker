@@ -16,7 +16,7 @@ class FBAccount(BaseModel):
     id: UUID
     name: str
     account_id: str  # act_XXXXX
-    panel_account_id: Optional[int] = None
+    fbtool_account_id: Optional[int] = None
     access_token: str  # encrypted
     cookie: str  # encrypted
     useragent: str

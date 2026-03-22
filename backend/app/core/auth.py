@@ -21,23 +21,20 @@ def get_db_for_user(
     return DatabaseService.for_user(user_id=user["sub"])
 
 
-async def get_user_panel_client(
+async def get_user_fbtool_client(
     db: "DatabaseService" = Depends(get_db_for_user),
 ):
-    """FastAPI dependency: create PanelClient from user's settings."""
-    from app.services.panel_client import PanelClient
+    """FastAPI dependency: create FbtoolClient from user's settings."""
+    from app.services.fbtool_client import FbtoolClient
 
     user_settings = db.get_user_settings()
-    if not user_settings or not user_settings.get("panel_jwt"):
+    if not user_settings or not user_settings.get("fbtool_cookies"):
         from fastapi import HTTPException
         raise HTTPException(
             status_code=400,
-            detail="Panel API not configured. Go to Settings and enter your Panel JWT.",
+            detail="fbtool.pro не настроен. Укажите cookies в Settings.",
         )
-    return PanelClient(
-        base_url=user_settings.get("panel_api_url") or None,
-        jwt_token=user_settings["panel_jwt"],
-    )
+    return FbtoolClient(cookies=user_settings["fbtool_cookies"])
 
 
 async def get_user_keitaro_client(

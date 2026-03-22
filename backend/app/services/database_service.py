@@ -10,7 +10,7 @@ from app.db.client import get_supabase, get_supabase_admin
 ENCRYPTED_FIELDS = {"access_token", "cookie", "proxy_password"}
 
 USER_SETTINGS_ENCRYPTED_FIELDS = {
-    "keitaro_login", "keitaro_password", "panel_jwt", "telegram_bot_token",
+    "keitaro_login", "keitaro_password", "fbtool_cookies", "telegram_bot_token",
 }
 
 
@@ -138,24 +138,24 @@ class DatabaseService:
         response = query.execute()
         return [_decrypt_fields(row) for row in response.data]
 
-    def get_account_by_panel_id(self, panel_id: int) -> Optional[dict]:
-        """Get account by panel_account_id."""
+    def get_account_by_fbtool_id(self, fbtool_id: int) -> Optional[dict]:
+        """Get account by fbtool_account_id."""
         query = (
             self.client.table("fb_accounts")
             .select("*")
-            .eq("panel_account_id", panel_id)
+            .eq("fbtool_account_id", fbtool_id)
         )
         if self.user_id:
             query = query.eq("user_id", self.user_id)
         response = query.execute()
         return _decrypt_fields(response.data[0]) if response.data else None
 
-    def upsert_account_by_panel_id(self, panel_id: int, data: dict[str, Any]) -> dict:
-        """Upsert account by panel_account_id."""
+    def upsert_account_by_fbtool_id(self, fbtool_id: int, data: dict[str, Any]) -> dict:
+        """Upsert account by fbtool_account_id."""
         query = (
             self.client.table("fb_accounts")
             .select("*")
-            .eq("panel_account_id", panel_id)
+            .eq("fbtool_account_id", fbtool_id)
         )
         if self.user_id:
             query = query.eq("user_id", self.user_id)
@@ -165,7 +165,7 @@ class DatabaseService:
             update_query = (
                 self.client.table("fb_accounts")
                 .update(data)
-                .eq("panel_account_id", panel_id)
+                .eq("fbtool_account_id", fbtool_id)
             )
             if self.user_id:
                 update_query = update_query.eq("user_id", self.user_id)

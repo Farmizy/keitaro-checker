@@ -4,7 +4,7 @@ class BudgetManagerError(Exception):
 
 
 class ExternalAPIError(BudgetManagerError):
-    """Error communicating with external API (Keitaro, 2KK Panel)."""
+    """Error communicating with external API (Keitaro, fbtool.pro)."""
     pass
 
 

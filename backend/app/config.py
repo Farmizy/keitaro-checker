@@ -13,9 +13,9 @@ class Settings(BaseSettings):
     keitaro_login: str = ""
     keitaro_password: str = ""
 
-    # 2KK Panel API — optional, now per-user via user_settings
-    panel_api_url: str = "https://fbm.adway.team/api"
-    panel_jwt: str = ""
+    # fbtool.pro — optional, now per-user via user_settings
+    fbtool_cookies: str = ""
+    fbtool_account_ids: str = ""  # JSON list, e.g. "[18856714, 18863836]"
 
     # Encryption
     encryption_key: str  # Fernet key
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
 
     # Scheduler
-    check_interval_minutes: int = 10
+    check_interval_minutes: int = 20
 
     # CORS
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

@@ -46,17 +46,17 @@ def _build_alerts(db: DatabaseService, recent_runs: list) -> list[dict]:
 
     # Check user settings configuration
     settings = db.get_user_settings()
-    if not settings or not settings.get("panel_jwt"):
+    if not settings or not settings.get("fbtool_cookies"):
         alerts.append({
             "type": "warning",
-            "key": "panel_not_configured",
-            "message": "Panel API не настроен. Настройте JWT токен в Settings.",
+            "key": "fbtool_not_configured",
+            "message": "fbtool.pro не настроен. Укажите cookies в Settings.",
         })
     if not settings or not settings.get("keitaro_url") or not settings.get("keitaro_login"):
         alerts.append({
             "type": "info",
             "key": "keitaro_not_configured",
-            "message": "Keitaro не настроен. Лиды будут браться из Panel API.",
+            "message": "Keitaro не настроен. Лиды будут браться из fbtool.",
         })
 
     if not recent_runs:
@@ -65,12 +65,12 @@ def _build_alerts(db: DatabaseService, recent_runs: list) -> list[dict]:
     last_run = recent_runs[0]
     details = last_run.get("details") or {}
 
-    # JWT expired
-    if last_run.get("status") == "failed" and details.get("error") == "Panel JWT expired":
+    # Fbtool session expired
+    if last_run.get("status") == "failed" and details.get("error") == "Fbtool session expired":
         alerts.append({
             "type": "error",
-            "key": "jwt_expired",
-            "message": "Panel JWT токен истёк! Обновите в Settings → Panel API → JWT Token.",
+            "key": "fbtool_expired",
+            "message": "Fbtool сессия истекла! Перелогиньтесь и обновите cookies в Settings.",
         })
 
     # Keitaro unavailable
@@ -78,7 +78,7 @@ def _build_alerts(db: DatabaseService, recent_runs: list) -> list[dict]:
         alerts.append({
             "type": "warning",
             "key": "keitaro_unavailable",
-            "message": "Keitaro недоступен. Лиды берутся из Panel API как fallback.",
+            "message": "Keitaro недоступен. Лиды берутся из fbtool как fallback.",
         })
 
     # Last run had errors

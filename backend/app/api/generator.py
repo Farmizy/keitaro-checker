@@ -5,8 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from app.core.auth import get_db_for_user, get_user_keitaro_client, get_user_panel_client
-from app.services.panel_client import PanelClient
+from app.core.auth import get_db_for_user, get_user_keitaro_client
 from app.schemas.generator import (
     AccountProfileCreate,
     AccountProfileResponse,
@@ -43,23 +42,6 @@ async def list_domains(
 ):
     """Get list of domains from Keitaro."""
     return await keitaro.get_domains()
-
-
-@router.get("/pages/{account_id}")
-async def list_pages(
-    account_id: UUID,
-    db: DatabaseService = Depends(get_db_for_user),
-    panel: PanelClient = Depends(get_user_panel_client),
-):
-    """Get Facebook Pages for an account from Panel API."""
-    account = db.get_account(account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    panel_id = account.get("panel_account_id")
-    if not panel_id:
-        raise HTTPException(status_code=400, detail="Account has no panel_account_id")
-    pages = await panel.get_account_pages(panel_id)
-    return [{"id": p.id, "name": p.name} for p in pages]
 
 
 @router.get("/account-profiles", response_model=list[AccountProfileResponse])

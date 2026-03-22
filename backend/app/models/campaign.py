@@ -21,7 +21,7 @@ class Campaign(BaseModel):
     id: UUID
     fb_account_id: UUID
     fb_campaign_id: str
-    panel_campaign_id: Optional[int] = None
+    fbtool_account_id: Optional[int] = None
     fb_campaign_name: str
     fb_adset_id: Optional[str] = None
     budget_level: BudgetLevel = BudgetLevel.CAMPAIGN

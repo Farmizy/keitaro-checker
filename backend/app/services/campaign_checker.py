@@ -1,10 +1,10 @@
-"""Orchestrator for the 10-minute campaign check cycle.
+"""Orchestrator for the 20-minute campaign check cycle.
 
 Multi-tenant: iterates over all users with configured settings,
 creates per-user clients, runs checks independently.
 
 Flow per user:
-1. Fetch campaigns + spend from Panel API
+1. For each fbtool account: fetch campaigns + spend from fbtool.pro
 2. Fetch conversions from Keitaro
 3. Sync campaigns to DB
 4. For each active campaign: evaluate rules → execute action → log
@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
-from app.services.panel_client import PanelClient, PanelCampaign, TokenExpiredError
+from app.services.fbtool_client import FbtoolClient, FbtoolCampaign, FbtoolAuthError
 from app.services.keitaro_client import KeitaroClient, KeitaroLoginBlocked
 from app.services.database_service import DatabaseService
 from app.services.action_executor import ActionExecutor
@@ -38,22 +38,19 @@ class CampaignChecker:
         for user_settings in all_users:
             user_id = user_settings["user_id"]
 
-            # Skip users without Panel JWT (not configured)
-            if not user_settings.get("panel_jwt"):
-                logger.debug(f"User {user_id}: no panel_jwt — skipped")
+            # Skip users without fbtool cookies (not configured)
+            if not user_settings.get("fbtool_cookies"):
+                logger.debug(f"User {user_id}: no fbtool_cookies — skipped")
                 continue
 
             user_db = DatabaseService.admin(user_id=user_id)
-            panel = PanelClient(
-                base_url=user_settings.get("panel_api_url") or None,
-                jwt_token=user_settings["panel_jwt"],
-            )
+            fbtool = FbtoolClient(cookies=user_settings["fbtool_cookies"])
             keitaro = KeitaroClient(
                 base_url=user_settings.get("keitaro_url") or None,
                 login=user_settings.get("keitaro_login") or None,
                 password=user_settings.get("keitaro_password") or None,
             )
-            executor = ActionExecutor(panel=panel, db=user_db)
+            executor = ActionExecutor(fbtool=fbtool, db=user_db)
 
             notifier = None
             if user_settings.get("telegram_bot_token") and user_settings.get("telegram_chat_id"):
@@ -62,23 +59,32 @@ class CampaignChecker:
                     chat_id=user_settings["telegram_chat_id"],
                 )
 
+            # fbtool_account_ids from user settings (JSON list)
+            fbtool_account_ids = user_settings.get("fbtool_account_ids") or []
+            if not fbtool_account_ids:
+                logger.warning(f"User {user_id}: no fbtool_account_ids configured — skipped")
+                continue
+
             try:
-                await self._run_check_for_user(panel, keitaro, user_db, executor, notifier)
+                await self._run_check_for_user(
+                    fbtool, keitaro, user_db, executor, notifier, fbtool_account_ids,
+                )
             except Exception as e:
                 logger.error(f"Check failed for user {user_id}: {e}")
             finally:
-                await panel.close()
+                await fbtool.close()
                 await keitaro.close()
                 if notifier:
                     await notifier.close()
 
     async def _run_check_for_user(
         self,
-        panel: PanelClient,
+        fbtool: FbtoolClient,
         keitaro: KeitaroClient,
         db: DatabaseService,
         executor: ActionExecutor,
         notifier: TelegramNotifier | None,
+        fbtool_account_ids: list[int],
     ):
         """Run full check cycle for a single user."""
         run = db.create_check_run({
@@ -95,23 +101,24 @@ class CampaignChecker:
             now = datetime.now(MOSCOW_TZ)
             today = now.strftime("%Y-%m-%d")
 
-            # 1. Sync accounts from Panel every cycle
-            logger.info("Syncing accounts from Panel...")
-            await self._sync_accounts_from_panel(panel, db, today)
+            # 1. Sync accounts from fbtool
+            logger.info("Syncing accounts from fbtool...")
+            await self._sync_accounts_from_fbtool(fbtool, db)
             db_accounts = db.get_active_accounts()
             logger.info(f"Got {len(db_accounts)} accounts from DB")
 
-            # 2. Fetch campaigns from Panel API (with spend)
-            logger.info("Fetching campaigns from Panel API...")
-            panel_campaigns = await panel.get_all_campaigns(
-                start_date=today,
-                end_date=today,
-                with_spent=True,
-            )
-            logger.info(f"Got {len(panel_campaigns)} campaigns from Panel")
+            # 2. Fetch campaigns from fbtool for each account
+            logger.info("Fetching campaigns from fbtool...")
+            all_fbtool_campaigns: list[FbtoolCampaign] = []
+            for account_id in fbtool_account_ids:
+                try:
+                    campaigns = await fbtool.get_campaigns(account_id, today)
+                    all_fbtool_campaigns.extend(campaigns)
+                except Exception as e:
+                    errors_count += 1
+                    logger.error(f"Failed to fetch campaigns for fbtool account {account_id}: {e}")
 
-            # 2b. Update accounts with real FB ad account IDs from campaign data
-            self._update_account_fb_ids(db, panel_campaigns)
+            logger.info(f"Got {len(all_fbtool_campaigns)} campaigns from fbtool")
 
             # 3. Fetch conversions from Keitaro (grouped by campaign_id via sub_id_2)
             logger.info("Fetching conversions from Keitaro...")
@@ -124,25 +131,24 @@ class CampaignChecker:
             except KeitaroLoginBlocked as e:
                 keitaro_available = False
                 logger.warning(f"Keitaro login blocked (rate limit), skipping: {e}")
-                # Don't spam Telegram on rate limit — it'll resolve itself in ~2 min
             except Exception as e:
                 keitaro_available = False
-                logger.error(f"Keitaro fetch failed, using Panel leads as fallback: {e}")
+                logger.error(f"Keitaro fetch failed, using fbtool leads as fallback: {e}")
                 if notifier:
                     try:
                         await notifier.send(
                             "⚠️ <b>Keitaro недоступен</b>\n\n"
                             f"Ошибка: {e}\n"
-                            "Проверка использует лиды из Panel API как fallback."
+                            "Проверка использует лиды из fbtool как fallback."
                         )
                     except Exception:
                         pass
 
-            # 4. Build account mappings (prefer panel_account_id, fallback to name)
-            account_by_panel_id = {
-                acc["panel_account_id"]: acc
+            # 4. Build account mappings by fbtool_account_id
+            account_by_fbtool_id = {
+                acc["fbtool_account_id"]: acc
                 for acc in db_accounts
-                if acc.get("panel_account_id")
+                if acc.get("fbtool_account_id")
             }
             account_by_name = {acc["name"]: acc for acc in db_accounts}
 
@@ -156,11 +162,11 @@ class CampaignChecker:
                 logger.info("No custom rules found, using defaults")
 
             # 5. Process each campaign
-            for pc in panel_campaigns:
+            for fc in all_fbtool_campaigns:
                 try:
                     result = await self._process_campaign(
                         db, executor, notifier,
-                        pc, account_by_panel_id, account_by_name,
+                        fc, account_by_fbtool_id, account_by_name,
                         keitaro_conversions, now, rule_kwargs,
                     )
                     if result == "checked":
@@ -170,7 +176,7 @@ class CampaignChecker:
                         actions_taken += 1
                 except Exception as e:
                     errors_count += 1
-                    logger.error(f"Error processing campaign {pc.campaign_id}: {e}")
+                    logger.error(f"Error processing campaign {fc.fb_campaign_id}: {e}")
 
             db.update_check_run(run_id, {
                 "status": "completed",
@@ -186,21 +192,21 @@ class CampaignChecker:
                 f"{actions_taken} actions, {errors_count} errors"
             )
 
-        except TokenExpiredError as e:
-            logger.error(f"Panel JWT expired, skipping check cycle: {e}")
+        except FbtoolAuthError as e:
+            logger.error(f"Fbtool session expired, skipping check cycle: {e}")
             db.update_check_run(run_id, {
                 "status": "failed",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "campaigns_checked": campaigns_checked,
                 "actions_taken": actions_taken,
                 "errors_count": errors_count + 1,
-                "details": {"error": "Panel JWT expired"},
+                "details": {"error": "Fbtool session expired"},
             })
             if notifier:
                 await notifier.send(
-                    "⚠️ <b>Panel JWT токен истёк!</b>\n\n"
+                    "⚠️ <b>Fbtool сессия истекла!</b>\n\n"
                     "Проверка кампаний пропущена.\n"
-                    "Обновите токен в Settings → Panel API → JWT Token"
+                    "Перелогиньтесь на fbtool.pro и обновите cookies в Settings."
                 )
 
         except Exception as e:
@@ -220,8 +226,8 @@ class CampaignChecker:
         db: DatabaseService,
         executor: ActionExecutor,
         notifier: TelegramNotifier | None,
-        pc: PanelCampaign,
-        account_by_panel_id: dict,
+        fc: FbtoolCampaign,
+        account_by_fbtool_id: dict,
         account_by_name: dict,
         keitaro_conversions: dict[str, int],
         now: datetime,
@@ -229,16 +235,16 @@ class CampaignChecker:
     ) -> str:
         """Process a single campaign. Returns 'skipped', 'checked', or 'action'."""
 
-        # Match to DB account: prefer panel_account_id, fallback to name
+        # Match to DB account: prefer fbtool_account_id, fallback to name
         db_account = None
-        if pc.panel_account_id:
-            db_account = account_by_panel_id.get(pc.panel_account_id)
+        if fc.fbtool_account_id:
+            db_account = account_by_fbtool_id.get(fc.fbtool_account_id)
         if not db_account:
-            db_account = account_by_name.get(pc.account_name)
+            db_account = account_by_name.get(fc.account_name)
         if not db_account:
             logger.warning(
-                f"Campaign {pc.name} ({pc.campaign_id}): "
-                f"account '{pc.account_name}' (panel_id={pc.panel_account_id}) "
+                f"Campaign {fc.name} ({fc.fb_campaign_id}): "
+                f"account '{fc.account_name}' (fbtool_id={fc.fbtool_account_id}) "
                 f"not found in DB — skipped"
             )
             return "skipped"
@@ -246,39 +252,39 @@ class CampaignChecker:
         fb_account_id = db_account["id"]
 
         # Always sync campaign status to DB (even if PAUSED)
-        db_campaign = self._sync_campaign(db, pc, fb_account_id)
+        db_campaign = self._sync_campaign(db, fc, fb_account_id)
 
         # Skip non-active campaigns in FB
-        if pc.effective_status != "ACTIVE":
-            logger.debug(f"Campaign {pc.name}: FB status {pc.effective_status} — skipped")
+        if fc.effective_status != "ACTIVE":
+            logger.debug(f"Campaign {fc.name}: FB status {fc.effective_status} — skipped")
             return "skipped"
 
         # Skip non-managed or stopped campaigns
         if not db_campaign.get("is_managed", True):
-            logger.debug(f"Campaign {pc.name}: not managed — skipped")
+            logger.debug(f"Campaign {fc.name}: not managed — skipped")
             return "skipped"
         if db_campaign.get("status") == "stopped":
-            logger.debug(f"Campaign {pc.name}: stopped in DB — skipped")
+            logger.debug(f"Campaign {fc.name}: stopped in DB — skipped")
             return "skipped"
 
-        # Leads: prefer Keitaro (sub_id_2 = campaign_id), fallback to Panel FB leads
-        keitaro_leads = keitaro_conversions.get(pc.campaign_id, None)
+        # Leads: prefer Keitaro (sub_id_2 = campaign_id), fallback to fbtool leads
+        keitaro_leads = keitaro_conversions.get(fc.fb_campaign_id, None)
         if keitaro_leads is not None:
             leads = keitaro_leads
         else:
-            leads = pc.leads_fb
+            leads = fc.leads
             if keitaro_conversions:
                 logger.debug(
-                    f"Campaign {pc.name}: no Keitaro data for campaign_id "
-                    f"{pc.campaign_id}, using Panel leads ({leads})"
+                    f"Campaign {fc.name}: no Keitaro data for campaign_id "
+                    f"{fc.fb_campaign_id}, using fbtool leads ({leads})"
                 )
 
         state = CampaignState(
-            spend=pc.spend,
+            spend=fc.spend,
             leads=leads,
-            current_budget=pc.daily_budget,
+            current_budget=fc.daily_budget,
             last_budget_change_at=_parse_dt(db_campaign.get("last_budget_change_at")),
-            link_clicks=pc.link_clicks,
+            link_clicks=fc.link_clicks,
         )
 
         action = evaluate(state, now, **(rule_kwargs or {}))
@@ -287,14 +293,15 @@ class CampaignChecker:
             return "checked"
 
         logger.info(
-            f"Campaign {pc.name} ({pc.campaign_id}): "
-            f"spend=${pc.spend:.2f}, leads={leads} → {action.type.value}: {action.reason}"
+            f"Campaign {fc.name} ({fc.fb_campaign_id}): "
+            f"spend=${fc.spend:.2f}, leads={leads} → {action.type.value}: {action.reason}"
         )
 
         success = await executor.execute(
             action=action,
             campaign_db_id=db_campaign["id"],
-            panel_internal_id=pc.internal_id,
+            fb_campaign_id=fc.fb_campaign_id,
+            fbtool_account_id=fc.fbtool_account_id,
             fb_account_id=fb_account_id,
         )
 
@@ -303,8 +310,8 @@ class CampaignChecker:
             try:
                 label = "STOP" if action.type == ActionType.STOP else "Manual review"
                 await notifier.send(
-                    f"{label}: {pc.name}\n"
-                    f"Spend: ${pc.spend:.2f}, Leads: {leads}\n"
+                    f"{label}: {fc.name}\n"
+                    f"Spend: ${fc.spend:.2f}, Leads: {leads}\n"
                     f"Reason: {action.reason}"
                 )
             except Exception as e:
@@ -313,75 +320,54 @@ class CampaignChecker:
         return "action" if success else "checked"
 
     @staticmethod
-    def _update_account_fb_ids(db: DatabaseService, campaigns: list):
-        """Update accounts with real FB ad account IDs extracted from campaign cab data."""
-        fb_ids_by_panel_account: dict[int, str] = {}
-        for pc in campaigns:
-            if pc.fb_ad_account_id and pc.panel_account_id and pc.fb_ad_account_id != "0":
-                fb_ids_by_panel_account[pc.panel_account_id] = pc.fb_ad_account_id
-
-        for panel_id, fb_id in fb_ids_by_panel_account.items():
-            clean_id = fb_id.replace("act_", "")
-            db.upsert_account_by_panel_id(panel_id, {"account_id": clean_id})
-            logger.info(f"Updated account panel_id={panel_id} with real FB account ID: {clean_id}")
-
-    @staticmethod
-    async def _sync_accounts_from_panel(panel: PanelClient, db: DatabaseService, today: str):
-        """Pull accounts from Panel API and upsert into DB."""
-        panel_accounts = await panel.get_accounts(
-            start_date=today, end_date=today,
-        )
-        for pa in panel_accounts:
+    async def _sync_accounts_from_fbtool(fbtool: FbtoolClient, db: DatabaseService):
+        """Pull accounts from fbtool.pro and upsert into DB."""
+        fbtool_accounts = await fbtool.get_accounts()
+        for fa in fbtool_accounts:
             account_data = {
-                "name": pa.name,
-                "panel_account_id": pa.internal_id,
-                "is_active": True,
+                "name": fa.name,
+                "fbtool_account_id": fa.fbtool_id,
+                "is_active": fa.token_status != "Ошибка",
             }
-            # Store real FB account ID if available from accounts API
-            if pa.fb_account_id and pa.fb_account_id != "0":
-                account_data["account_id"] = pa.fb_account_id
-            else:
-                # Only set panel_XXXX fallback if account doesn't already have a real ID
-                existing = db.get_account_by_panel_id(pa.internal_id)
-                if not existing or (existing.get("account_id", "").startswith("panel_")):
-                    account_data["account_id"] = f"panel_{pa.internal_id}"
-            db.upsert_account_by_panel_id(pa.internal_id, account_data)
+            # Store real FB ad account ID if available
+            if fa.primary_ad_account_id:
+                account_data["account_id"] = fa.primary_ad_account_id
+            db.upsert_account_by_fbtool_id(fa.fbtool_id, account_data)
 
     @staticmethod
-    def _sync_campaign(db: DatabaseService, pc: PanelCampaign, fb_account_id: str) -> dict:
-        """Sync Panel campaign data to DB, preserving 'stopped' status."""
+    def _sync_campaign(db: DatabaseService, fc: FbtoolCampaign, fb_account_id: str) -> dict:
+        """Sync fbtool campaign data to DB, preserving 'stopped' status."""
         existing = db.get_campaign_by_fb_ids(
-            str(fb_account_id), str(pc.campaign_id),
+            str(fb_account_id), str(fc.fb_campaign_id),
         )
 
         update_data = {
-            "panel_campaign_id": pc.internal_id,
-            "fb_campaign_name": pc.name,
-            "current_budget": pc.daily_budget,
-            "total_spend": pc.spend,
-            "leads_count": pc.leads_fb,
+            "fb_campaign_name": fc.name,
+            "current_budget": fc.daily_budget,
+            "total_spend": fc.spend,
+            "leads_count": fc.leads,
             "last_fb_sync": datetime.now(timezone.utc).isoformat(),
         }
 
         if existing:
-            if existing.get("status") == "stopped" and pc.effective_status == "ACTIVE":
+            if existing.get("status") == "stopped" and fc.effective_status == "ACTIVE":
                 # Campaign was stopped by system but manually restarted in FB
                 logger.info(
-                    f"Campaign {pc.name} ({pc.campaign_id}) was stopped but "
+                    f"Campaign {fc.name} ({fc.fb_campaign_id}) was stopped but "
                     f"restarted in FB — unlocking to active"
                 )
                 update_data["status"] = "active"
             elif existing.get("status") != "stopped":
                 update_data["status"] = (
-                    "active" if pc.effective_status == "ACTIVE" else "paused"
+                    "active" if fc.effective_status == "ACTIVE" else "paused"
                 )
             return db.update_campaign(existing["id"], update_data)
 
         # New campaign
         update_data.update({
             "fb_account_id": str(fb_account_id),
-            "fb_campaign_id": str(pc.campaign_id),
-            "status": "active" if pc.effective_status == "ACTIVE" else "paused",
+            "fb_campaign_id": str(fc.fb_campaign_id),
+            "status": "active" if fc.effective_status == "ACTIVE" else "paused",
         })
         return db.upsert_campaign(update_data)
 

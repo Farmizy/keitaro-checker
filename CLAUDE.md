@@ -1,6 +1,6 @@
 # FB Budget Manager
 
-Система автоматического управления бюджетами рекламных кампаний Facebook. Тянет лиды из Keitaro Tracker, расходы из Facebook, и по "лестнице" правил повышает бюджеты успешным кампаниям или останавливает убыточные. Проверка каждые 10 минут.
+Система автоматического управления бюджетами рекламных кампаний Facebook. Тянет лиды из Keitaro Tracker, расходы из fbtool.pro, и по "лестнице" правил повышает бюджеты успешным кампаниям или останавливает убыточные. Проверка каждые 20 минут.
 
 ## Запуск
 
@@ -8,7 +8,7 @@
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env  # заполнить SUPABASE_URL, SUPABASE_KEY, KEITARO_URL, KEITARO_LOGIN, KEITARO_PASSWORD, PANEL_JWT, ENCRYPTION_KEY
+cp .env.example .env  # заполнить SUPABASE_URL, SUPABASE_KEY, KEITARO_URL, KEITARO_LOGIN, KEITARO_PASSWORD, FBTOOL_COOKIES, ENCRYPTION_KEY
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -41,10 +41,10 @@ backend/
     models/              — Pydantic-модели данных
     schemas/             — Request/Response схемы для API
     services/            — Бизнес-логика:
-      panel_client.py      — HTTP-клиент к 2KK Panel API (fbm.adway.team/api/)
+      fbtool_client.py     — HTTP-клиент к fbtool.pro (реверс-инжиниринг внутреннего API)
       keitaro_client.py    — Keitaro Internal Panel API (лиды через sub_id_4)
       rule_engine.py       — Чистая логика лестницы правил (без побочных эффектов)
-      campaign_checker.py  — Оркестратор 10-мин цикла проверки
+      campaign_checker.py  — Оркестратор 20-мин цикла проверки
       action_executor.py   — Исполнитель действий (бюджет/пауза)
       database_service.py  — CRUD с Supabase
       scheduler_service.py — Обёртка APScheduler
@@ -72,7 +72,7 @@ frontend/
 ## Правила
 
 ### Всегда
-- Все чувствительные данные (access_token, cookie, proxy_password) шифровать через Fernet перед записью в БД
+- Все чувствительные данные (access_token, cookie, proxy_password, fbtool_cookies) шифровать через Fernet перед записью в БД
 - Все HTTP-запросы к Facebook — ТОЛЬКО через прокси аккаунта с его cookie/token/useragent
 - rule_engine.py — чистая функция без побочных эффектов. Никаких HTTP-запросов, никакой записи в БД внутри
 - Логировать ВСЕ действия системы в action_logs (и успешные, и неуспешные)
@@ -88,11 +88,20 @@ frontend/
 - НЕ коммитить .env файлы
 - НЕ выполнять действия в Facebook без записи в action_logs
 
+### fbtool.pro-специфика
+- fbtool.pro используется через **реверс-инжиниринг внутренних запросов** (не официальный API — лимит 100/день)
+- Auth: cookie `_identity` (30 дней) + `PHPSESSID` + `_csrf`. hCaptcha при логине — только ручной вход
+- Чтение: GET HTML-страниц → парсинг BeautifulSoup. Статистика: `/statistics`, аккаунты: `/accounts`
+- Запись: POST к `/task/status` (start/stop), `/task/budget` (set/up/down) с CSRF-токеном
+- fbtool использует **Facebook campaign ID напрямую** для всех операций (нет своих internal ID для кампаний)
+- При истечении cookie `_identity` — уведомление в Telegram, пользователь перелогинивается (~раз в 30 дней)
+- Документация реверса: `docs/plans/2026-03-22-fbtool-migration.md`
+
 ### Keitaro-специфика
 - Keitaro использует **internal panel API** (`POST /admin/?object=reports.build`), НЕ documented Admin API (`/admin_api/v1/` — нет API-ключа)
 - Auth: session cookie (`keitaro=<session_id>`), логин через `POST /admin/?object=auth.login`
 - Лиды получаем через `POST /admin/?object=reports.build` с `grouping: ["sub_id_4"]`
-- sub_id_4 = Facebook Ad ID (`{{ad.id}}`). Маппинг ad_id → campaign_id через 2KK Panel API
+- sub_id_4 = Facebook Ad ID (`{{ad.id}}`). Маппинг ad_id → campaign_id через fbtool
 - Метрика лидов: поле `conversions` (все конверсии без фильтра по статусу)
 - Лиды и spend считаются за СЕГОДНЯ (interval: "today", timezone: Europe/Moscow), лестница сбрасывается ежедневно
 - Полная документация: `docs/api-reference-keitaro.md`
@@ -112,7 +121,7 @@ frontend/
 
 ## Стек
 
-- **Backend**: Python 3.11+, FastAPI, APScheduler, httpx + httpx-socks, Pydantic, loguru, tenacity, cryptography
+- **Backend**: Python 3.11+, FastAPI, APScheduler, httpx + httpx-socks, Pydantic, loguru, tenacity, cryptography, beautifulsoup4
 - **Frontend**: React 18+, TypeScript, Vite, TanStack Query, Tailwind CSS + shadcn/ui, Recharts, React Hook Form + Zod
 - **DB**: Supabase (PostgreSQL)
 - **Deploy**: Docker Compose на VPS
@@ -127,3 +136,6 @@ frontend/
 
 ### Скрытие комментариев — отложено
 Функция hide_comments есть в модели fb_accounts, но логика не реализована.
+
+### panel_client.py — deprecated
+Старый клиент для 2KK Panel (fbm.adway.team). Не используется, оставлен как reference. Заменён на fbtool_client.py.

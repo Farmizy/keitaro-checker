@@ -2,7 +2,7 @@ export interface Account {
   id: string
   name: string
   account_id: string
-  panel_account_id: number | null
+  fbtool_account_id: number | null
   useragent: string
   proxy_type: "socks5" | "http" | "https"
   proxy_host: string
@@ -19,7 +19,7 @@ export interface Account {
 export interface AccountCreate {
   name: string
   account_id: string
-  panel_account_id?: number | null
+  fbtool_account_id?: number | null
   access_token: string
   cookie: string
   useragent: string
@@ -33,7 +33,7 @@ export interface AccountCreate {
 export interface AccountUpdate {
   name?: string
   account_id?: string
-  panel_account_id?: number | null
+  fbtool_account_id?: number | null
   access_token?: string
   cookie?: string
   useragent?: string
@@ -49,7 +49,7 @@ export interface Campaign {
   id: string
   fb_account_id: string
   fb_campaign_id: string
-  panel_campaign_id: number | null
+  fbtool_account_id: number | null
   fb_campaign_name: string
   fb_adset_id: string | null
   budget_level: "campaign" | "adset"

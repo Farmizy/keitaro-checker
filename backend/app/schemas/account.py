@@ -10,7 +10,7 @@ from app.models.fb_account import ProxyType
 class AccountCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     account_id: str = Field(..., min_length=1, description="Facebook account ID (act_XXXXX)")
-    panel_account_id: Optional[int] = None
+    fbtool_account_id: Optional[int] = None
     access_token: str = ""
     cookie: str = ""
     useragent: str = ""
@@ -24,7 +24,7 @@ class AccountCreate(BaseModel):
 class AccountUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     account_id: Optional[str] = None
-    panel_account_id: Optional[int] = None
+    fbtool_account_id: Optional[int] = None
     access_token: Optional[str] = None
     cookie: Optional[str] = None
     useragent: Optional[str] = None
@@ -40,7 +40,7 @@ class AccountResponse(BaseModel):
     id: UUID
     name: str
     account_id: str
-    panel_account_id: Optional[int] = None
+    fbtool_account_id: Optional[int] = None
     is_active: bool
     last_check_at: Optional[datetime] = None
     last_error: Optional[str] = None

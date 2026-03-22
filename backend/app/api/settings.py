@@ -9,15 +9,15 @@ router = APIRouter()
 
 MASKED = "***"
 
-SENSITIVE_FIELDS = {"keitaro_password", "panel_jwt", "telegram_bot_token"}
+SENSITIVE_FIELDS = {"keitaro_password", "fbtool_cookies", "telegram_bot_token"}
 
 
 class UserSettingsUpdate(BaseModel):
     keitaro_url: str | None = None
     keitaro_login: str | None = None
     keitaro_password: str | None = None
-    panel_api_url: str | None = None
-    panel_jwt: str | None = None
+    fbtool_cookies: str | None = None
+    fbtool_account_ids: list[int] | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
@@ -35,8 +35,9 @@ def _mask_settings(row: dict) -> dict:
         and row.get("keitaro_login")
         and row.get("keitaro_password")
     )
-    result["panel_configured"] = bool(
-        row.get("panel_api_url") and row.get("panel_jwt")
+    result["fbtool_configured"] = bool(
+        row.get("fbtool_cookies")
+        and row.get("fbtool_account_ids")
     )
     result["telegram_configured"] = bool(
         row.get("telegram_bot_token") and row.get("telegram_chat_id")
@@ -54,12 +55,12 @@ async def get_settings(db: DatabaseService = Depends(get_db_for_user)):
             "keitaro_url": "",
             "keitaro_login": "",
             "keitaro_password": "",
-            "panel_api_url": "",
-            "panel_jwt": "",
+            "fbtool_cookies": "",
+            "fbtool_account_ids": [],
             "telegram_bot_token": "",
             "telegram_chat_id": "",
             "keitaro_configured": False,
-            "panel_configured": False,
+            "fbtool_configured": False,
             "telegram_configured": False,
         }
     return _mask_settings(row)
@@ -107,26 +108,25 @@ async def test_keitaro(db: DatabaseService = Depends(get_db_for_user)):
         await client.close()
 
 
-@router.post("/test/panel")
-async def test_panel(db: DatabaseService = Depends(get_db_for_user)):
-    """Test Panel API connection with current user settings."""
-    from app.services.panel_client import PanelClient
+@router.post("/test/fbtool")
+async def test_fbtool(db: DatabaseService = Depends(get_db_for_user)):
+    """Test fbtool.pro connection with current user cookies."""
+    from app.services.fbtool_client import FbtoolClient, FbtoolAuthError
 
     s = db.get_user_settings()
-    if not s or not s.get("panel_jwt"):
-        raise HTTPException(400, "Panel API не настроен")
-    client = PanelClient(
-        base_url=s.get("panel_api_url") or None,
-        jwt_token=s["panel_jwt"],
-    )
+    if not s or not s.get("fbtool_cookies"):
+        raise HTTPException(400, "fbtool.pro не настроен")
+    client = FbtoolClient(cookies=s["fbtool_cookies"])
     try:
-        from datetime import datetime
-        import zoneinfo
-        today = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d")
-        accounts = await client.get_accounts(start_date=today, end_date=today)
-        return {"status": "ok", "message": f"Подключение успешно. Аккаунтов: {len(accounts)}"}
+        accounts = await client.get_accounts()
+        return {
+            "status": "ok",
+            "message": f"Подключение успешно. Аккаунтов: {len(accounts)}",
+        }
+    except FbtoolAuthError as e:
+        raise HTTPException(400, f"Сессия истекла: {e}")
     except Exception as e:
-        logger.error(f"Panel test failed: {e}")
+        logger.error(f"fbtool test failed: {e}")
         raise HTTPException(400, f"Ошибка: {e}")
     finally:
         await client.close()

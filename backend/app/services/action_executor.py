@@ -1,26 +1,27 @@
-"""Executes rule engine decisions via Panel API and logs to DB."""
+"""Executes rule engine decisions via fbtool.pro API and logs to DB."""
 
 import zoneinfo
 from datetime import datetime
 
 from loguru import logger
 
-from app.services.panel_client import PanelClient
+from app.services.fbtool_client import FbtoolClient
 from app.services.database_service import DatabaseService
 from app.services.rule_engine import Action, ActionType
 
 
 class ActionExecutor:
 
-    def __init__(self, panel: PanelClient, db: DatabaseService):
-        self.panel = panel
+    def __init__(self, fbtool: FbtoolClient, db: DatabaseService):
+        self.fbtool = fbtool
         self.db = db
 
     async def execute(
         self,
         action: Action,
         campaign_db_id: str,
-        panel_internal_id: int,
+        fb_campaign_id: str,
+        fbtool_account_id: int,
         fb_account_id: str,
     ) -> bool:
         """Execute an action and log it. Returns True if action was taken."""
@@ -29,12 +30,12 @@ class ActionExecutor:
 
         if action.type == ActionType.SET_BUDGET:
             return await self._set_budget(
-                action, campaign_db_id, panel_internal_id, fb_account_id,
+                action, campaign_db_id, fb_campaign_id, fbtool_account_id, fb_account_id,
             )
 
         if action.type == ActionType.STOP:
             return await self._stop_campaign(
-                action, campaign_db_id, panel_internal_id, fb_account_id,
+                action, campaign_db_id, fb_campaign_id, fbtool_account_id, fb_account_id,
             )
 
         if action.type == ActionType.MANUAL_REVIEW:
@@ -44,12 +45,14 @@ class ActionExecutor:
 
     async def _set_budget(
         self, action: Action, campaign_db_id: str,
-        panel_internal_id: int, fb_account_id: str,
+        fb_campaign_id: str, fbtool_account_id: int, fb_account_id: str,
     ) -> bool:
         success = False
         error_msg = None
         try:
-            success = await self.panel.set_budget(panel_internal_id, action.target_budget)
+            success = await self.fbtool.set_budget(
+                fbtool_account_id, fb_campaign_id, action.target_budget,
+            )
             if success:
                 self.db.update_campaign(campaign_db_id, {
                     "current_budget": action.target_budget,
@@ -57,24 +60,24 @@ class ActionExecutor:
                 })
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Failed to set budget for campaign {panel_internal_id}: {e}")
+            logger.error(f"Failed to set budget for campaign {fb_campaign_id}: {e}")
 
         self._log(campaign_db_id, fb_account_id, "budget_increase", action, success, error_msg)
         return success
 
     async def _stop_campaign(
         self, action: Action, campaign_db_id: str,
-        panel_internal_id: int, fb_account_id: str,
+        fb_campaign_id: str, fbtool_account_id: int, fb_account_id: str,
     ) -> bool:
         success = False
         error_msg = None
         try:
-            success = await self.panel.pause_campaign(panel_internal_id)
+            success = await self.fbtool.stop_campaign(fbtool_account_id, fb_campaign_id)
             if success:
                 self.db.update_campaign(campaign_db_id, {"status": "stopped"})
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Failed to stop campaign {panel_internal_id}: {e}")
+            logger.error(f"Failed to stop campaign {fb_campaign_id}: {e}")
 
         self._log(campaign_db_id, fb_account_id, "campaign_stop", action, success, error_msg)
         return success
