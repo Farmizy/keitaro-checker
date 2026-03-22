@@ -103,7 +103,7 @@ class FbtoolClient:
             f"&adaccount_status=all"
             f"&ad_account_id=all"
         )
-        html = await self._get_page(url, extra_cookies="statistics_mode=campaigns")
+        html = await self._get_page(url)
         return self._parse_statistics(html, account_id)
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
