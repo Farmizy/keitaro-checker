@@ -3,11 +3,12 @@
 No official API used (100 req/day limit). All operations via session cookies.
 
 Auth: _identity cookie (30 days) + PHPSESSID + _csrf cookie.
-Reads: GET HTML pages → parse with BeautifulSoup.
+Reads: GET /ajax/* JSON endpoints (statistics, accounts).
 Writes: POST to /task/* endpoints with CSRF token.
 """
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -80,7 +81,7 @@ class FbtoolClient:
     async def close(self):
         await self._http.aclose()
 
-    # ─── Reads (HTML parsing) ──────────────────────────────────
+    # ─── Reads (AJAX JSON API) ──────────────────────────────────
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
     async def get_campaigns(
@@ -88,14 +89,14 @@ class FbtoolClient:
         account_id: int,
         date: str,
     ) -> list[FbtoolCampaign]:
-        """Fetch campaign-level statistics for a given date.
+        """Fetch campaign-level statistics for a given date via AJAX JSON API.
 
         Args:
             account_id: fbtool account ID (e.g. 18856714)
             date: Date string YYYY-MM-DD
         """
         url = (
-            f"{BASE_URL}/statistics"
+            f"{BASE_URL}/ajax/get-statistics"
             f"?id={account_id}"
             f"&dates={date}+-+{date}"
             f"&status=all"
@@ -103,8 +104,8 @@ class FbtoolClient:
             f"&adaccount_status=all"
             f"&ad_account_id=all"
         )
-        html = await self._get_page(url)
-        return self._parse_statistics(html, account_id)
+        data = await self._get_json(url)
+        return self._parse_statistics_json(data, account_id)
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
     async def get_accounts(self) -> list[FbtoolAccount]:
@@ -179,6 +180,25 @@ class FbtoolClient:
             logger.error(f"fbtool: status change failed: {resp.status_code} {resp.text[:200]}")
         return success
 
+    async def _get_json(self, url: str) -> Any:
+        """GET a JSON endpoint with session cookies."""
+        resp = await self._http.get(
+            url,
+            headers={
+                "Cookie": self._cookie_str,
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+            },
+        )
+
+        if resp.status_code in (301, 302):
+            location = resp.headers.get("location", "")
+            if "login" in location:
+                raise FbtoolAuthError("Session expired — redirected to login")
+
+        resp.raise_for_status()
+        return resp.json()
+
     async def _get_page(self, url: str, extra_cookies: str = "") -> str:
         """GET a page with session cookies. Returns HTML. Updates CSRF token."""
         cookies = self._cookie_str
@@ -236,128 +256,82 @@ class FbtoolClient:
         if not self._csrf_token:
             await self._get_page(f"{BASE_URL}/")
 
-    # ─── HTML Parsers ──────────────────────────────────────────
+    # ─── JSON Parsers ───────────────────────────────────────────
 
     @staticmethod
-    def _parse_statistics(html: str, account_id: int) -> list[FbtoolCampaign]:
-        """Parse /statistics page HTML (mode=campaigns) into FbtoolCampaign list."""
-        soup = BeautifulSoup(html, "html.parser")
-        table = soup.find("table", id="basicTable")
-        if not table:
-            logger.warning("fbtool: statistics table #basicTable not found")
-            return []
+    def _parse_statistics_json(data: Any, account_id: int) -> list[FbtoolCampaign]:
+        """Parse /ajax/get-statistics JSON into FbtoolCampaign list.
 
-        tbody = table.find("tbody")
-        if not tbody:
-            return []
-
-        campaigns = []
-        for row in tbody.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) < 12:
-                continue
-
-            try:
-                campaign = FbtoolClient._parse_campaign_row(cells, account_id)
-                if campaign:
-                    campaigns.append(campaign)
-            except Exception as e:
-                logger.debug(f"fbtool: failed to parse stats row: {e}")
-                continue
-
-        logger.info(f"fbtool: parsed {len(campaigns)} campaigns from statistics")
-        return campaigns
-
-    @staticmethod
-    def _parse_campaign_row(cells: list, account_id: int) -> FbtoolCampaign | None:
-        """Parse a single <tr> from statistics table (mode=campaigns).
-
-        Cell layout:
-        0: checkbox
-        1: Campaign name + (FB_ID) + STATUS + budget info
-        2: Ad account (cab) name + (FB_AD_ACCOUNT_ID)
-        3: Account name + #FBTOOL_ID
-        4: Impressions
-        5: Link clicks
-        6: CPC (link)
-        7: Leads
-        8: CPL
-        9: CR
-        10: CTR (link)
-        11: CPM
-        12: Spend
+        The JSON returns ad-level rows. We aggregate by campaign_id to get
+        campaign-level spend/leads/clicks/impressions.
+        Budget is in cents (campaign_daily_budget: "3000" = $30).
         """
-        # Cell 1: Campaign info
-        camp_cell = cells[1]
-        camp_text = camp_cell.get_text(" ", strip=True)
+        if not data or not isinstance(data, list):
+            return []
 
-        # Extract FB campaign ID: (1234567890)
-        fb_id_match = re.search(r'\((\d{10,20})\)', camp_text)
-        if not fb_id_match:
-            return None
-        fb_campaign_id = fb_id_match.group(1)
+        # Collect all rows from all groups
+        all_rows: list[dict] = []
+        for group in data:
+            rows = group.get("rows", [])
+            all_rows.extend(rows)
 
-        # Extract campaign name (everything before the FB ID)
-        name = camp_text[:fb_id_match.start()].strip()
+        if not all_rows:
+            return []
 
-        # Extract status: look for known status strings
-        status = "UNKNOWN"
-        for s in ("ACTIVE", "PAUSED", "CAMPAIGN_PAUSED", "DISAPPROVED",
-                   "DELETED", "ARCHIVED", "PENDING_REVIEW", "WITH_ISSUES"):
-            if s in camp_text:
-                status = s
-                break
+        # Aggregate by campaign_id
+        campaigns_map: dict[str, dict] = {}
+        for row in all_rows:
+            cid = row.get("campaign_id") or row.get("main_param")
+            if not cid:
+                continue
 
-        # Extract budget: <strong>30 USD</strong>
-        budget = 0.0
-        currency = "USD"
-        budget_strong = camp_cell.find("strong")
-        if budget_strong:
-            budget_text = budget_strong.get_text(strip=True)
-            budget_match = re.match(r'([\d.]+)\s*(\w+)', budget_text)
-            if budget_match:
-                budget = float(budget_match.group(1))
-                currency = budget_match.group(2)
+            if cid not in campaigns_map:
+                budget_cents = int(row.get("campaign_daily_budget") or 0)
+                campaigns_map[cid] = {
+                    "fb_campaign_id": cid,
+                    "name": row.get("campaign_name", ""),
+                    "daily_budget": budget_cents / 100,
+                    "currency": row.get("currency", "USD"),
+                    "effective_status": row.get("campaign_effective_status", "UNKNOWN"),
+                    "fb_ad_account_id": row.get("ad_account_id", ""),
+                    "account_name": row.get("account_name", ""),
+                    "spend": 0.0,
+                    "leads": 0,
+                    "link_clicks": 0,
+                    "impressions": 0,
+                }
 
-        # Cell 2: Ad account
-        cab_cell = cells[2]
-        cab_text = cab_cell.get_text(" ", strip=True)
-        fb_ad_account_id = ""
-        ad_account_match = re.search(r'\((\d{10,20})\)', cab_text)
-        if ad_account_match:
-            fb_ad_account_id = ad_account_match.group(1)
+            agg = campaigns_map[cid]
+            agg["spend"] += float(row.get("spend") or 0)
+            agg["leads"] += int(row.get("leads") or 0)
+            agg["link_clicks"] += int(row.get("link_click") or 0)
+            agg["impressions"] += int(row.get("impressions") or 0)
 
-        # Cell 3: Account
-        acc_cell = cells[3]
-        acc_text = acc_cell.get_text(" ", strip=True)
-        # Extract account name from link
-        acc_link = acc_cell.find("a")
-        account_name = acc_link.get_text(strip=True) if acc_link else ""
+        # Build FbtoolCampaign objects
+        campaigns = []
+        for agg in campaigns_map.values():
+            clicks = agg["link_clicks"]
+            spend = agg["spend"]
+            leads = agg["leads"]
+            campaigns.append(FbtoolCampaign(
+                fb_campaign_id=agg["fb_campaign_id"],
+                name=agg["name"],
+                daily_budget=agg["daily_budget"],
+                currency=agg["currency"],
+                effective_status=agg["effective_status"],
+                spend=spend,
+                leads=leads,
+                link_clicks=clicks,
+                impressions=agg["impressions"],
+                cpc=round(spend / clicks, 2) if clicks > 0 else 0.0,
+                cpl=round(spend / leads, 2) if leads > 0 else 0.0,
+                fb_ad_account_id=agg["fb_ad_account_id"],
+                account_name=agg["account_name"],
+                fbtool_account_id=account_id,
+            ))
 
-        # Stats cells (4-12)
-        def parse_num(cell_idx: int) -> float:
-            text = cells[cell_idx].get_text(strip=True).replace(",", "").replace(" ", "")
-            try:
-                return float(text)
-            except (ValueError, TypeError):
-                return 0.0
-
-        return FbtoolCampaign(
-            fb_campaign_id=fb_campaign_id,
-            name=name,
-            daily_budget=budget,
-            currency=currency,
-            effective_status=status,
-            impressions=int(parse_num(4)),
-            link_clicks=int(parse_num(5)),
-            cpc=parse_num(6),
-            leads=int(parse_num(7)),
-            cpl=parse_num(8),
-            spend=parse_num(12),
-            fb_ad_account_id=fb_ad_account_id,
-            account_name=account_name,
-            fbtool_account_id=account_id,
-        )
+        logger.info(f"fbtool: parsed {len(campaigns)} campaigns for account {account_id}")
+        return campaigns
 
     @staticmethod
     def _parse_accounts(html: str) -> list[FbtoolAccount]:
