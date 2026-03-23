@@ -8,9 +8,51 @@ import { useNavigate } from "react-router-dom"
 import type { DashboardAlert } from "@/types"
 
 const alertStyles: Record<DashboardAlert["type"], { bg: string; border: string; icon: typeof AlertCircle }> = {
-  error: { bg: "bg-red-50 dark:bg-red-950/30", border: "border-red-200 dark:border-red-800", icon: AlertCircle },
-  warning: { bg: "bg-yellow-50 dark:bg-yellow-950/30", border: "border-yellow-200 dark:border-yellow-800", icon: AlertTriangle },
-  info: { bg: "bg-blue-50 dark:bg-blue-950/30", border: "border-blue-200 dark:border-blue-800", icon: Info },
+  error: { bg: "bg-rose-500/8", border: "border-rose-500/20", icon: AlertCircle },
+  warning: { bg: "bg-amber-500/8", border: "border-amber-500/20", icon: AlertTriangle },
+  info: { bg: "bg-blue-500/8", border: "border-blue-500/20", icon: Info },
+}
+
+const cardAccents = [
+  { gradient: "from-violet-500/20 to-transparent", iconBg: "bg-violet-500/15", iconColor: "text-violet-400" },
+  { gradient: "from-emerald-500/20 to-transparent", iconBg: "bg-emerald-500/15", iconColor: "text-emerald-400" },
+  { gradient: "from-cyan-500/20 to-transparent", iconBg: "bg-cyan-500/15", iconColor: "text-cyan-400" },
+  { gradient: "from-blue-500/20 to-transparent", iconBg: "bg-blue-500/15", iconColor: "text-blue-400" },
+  { gradient: "from-amber-500/20 to-transparent", iconBg: "bg-amber-500/15", iconColor: "text-amber-400" },
+  { gradient: "from-rose-500/20 to-transparent", iconBg: "bg-rose-500/15", iconColor: "text-rose-400" },
+  { gradient: "from-indigo-500/20 to-transparent", iconBg: "bg-indigo-500/15", iconColor: "text-indigo-400" },
+  { gradient: "from-teal-500/20 to-transparent", iconBg: "bg-teal-500/15", iconColor: "text-teal-400" },
+]
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="h-8 w-40 skeleton" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="rounded-xl border border-border p-6 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="h-4 w-20 skeleton" />
+              <div className="h-8 w-8 rounded-lg skeleton" />
+            </div>
+            <div className="h-8 w-24 skeleton" />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-xl border border-border p-6 space-y-4">
+            <div className="h-5 w-32 skeleton" />
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, j) => (
+                <div key={j} className="h-10 w-full skeleton" />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export default function DashboardPage() {
@@ -18,7 +60,7 @@ export default function DashboardPage() {
   const navigate = useNavigate()
 
   if (isLoading || !stats) {
-    return <div className="text-muted-foreground">Loading...</div>
+    return <DashboardSkeleton />
   }
 
   const cards = [
@@ -34,10 +76,10 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
 
       {stats.alerts?.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-2 animate-fade-in">
           {stats.alerts.map((alert) => {
             const style = alertStyles[alert.type]
             const Icon = style.icon
@@ -45,7 +87,7 @@ export default function DashboardPage() {
             return (
               <div
                 key={alert.key}
-                className={`flex items-center gap-3 rounded-lg border p-3 ${style.bg} ${style.border} ${isSettingsAlert ? "cursor-pointer hover:opacity-80" : ""}`}
+                className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${style.bg} ${style.border} ${isSettingsAlert ? "cursor-pointer hover:opacity-80" : ""}`}
                 onClick={isSettingsAlert ? () => navigate("/settings") : undefined}
               >
                 <Icon className="h-4 w-4 shrink-0" />
@@ -57,18 +99,24 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map(({ label, value, icon: Icon }) => (
-          <Card key={label}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-              <Icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{value}</div>
-            </CardContent>
-          </Card>
-        ))}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 stagger-children">
+        {cards.map(({ label, value, icon: Icon }, i) => {
+          const accent = cardAccents[i]
+          return (
+            <Card key={label} className="relative overflow-hidden">
+              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accent.gradient} opacity-50`} />
+              <CardHeader className="relative flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${accent.iconBg}`}>
+                  <Icon className={`h-4 w-4 ${accent.iconColor}`} />
+                </div>
+              </CardHeader>
+              <CardContent className="relative">
+                <div className="text-2xl font-bold tracking-tight">{value}</div>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">

@@ -27,14 +27,14 @@ export function Dialog({ open, onClose, children, className }: DialogProps) {
       ref={ref}
       onClose={onClose}
       className={cn(
-        "backdrop:bg-black/60 bg-card text-card-foreground rounded-xl border border-border p-0 max-w-lg w-full",
+        "bg-card text-card-foreground rounded-xl border border-border p-0 max-w-lg w-full shadow-2xl shadow-black/40 gradient-border",
         className,
       )}
     >
       <div className="relative p-6">
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 text-muted-foreground hover:text-foreground cursor-pointer"
+          className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
@@ -49,5 +49,5 @@ export function DialogHeader({ children, className }: { children: ReactNode; cla
 }
 
 export function DialogTitle({ children, className }: { children: ReactNode; className?: string }) {
-  return <h2 className={cn("text-lg font-semibold", className)}>{children}</h2>
+  return <h2 className={cn("text-lg font-semibold tracking-tight", className)}>{children}</h2>
 }
