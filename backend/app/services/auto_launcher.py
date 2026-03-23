@@ -492,20 +492,23 @@ class AutoLauncher:
                                 f"but start_campaign failed after 3 attempts"
                             ),
                         })
-                        db.create_action_log({
-                            "campaign_id": str(item["campaign_id"]),
-                            "fb_account_id": str(item["fb_account_id"]),
-                            "action_type": "auto_launch",
-                            "details": {
-                                "launch_type": item["launch_type"],
-                                "target_budget": target_budget,
-                                "partial_state": True,
-                                "budget_set": True,
-                                "resumed": False,
-                                "analysis_data": item.get("analysis_data", {}),
-                            },
-                            "success": False,
-                        })
+                        try:
+                            db.create_action_log({
+                                "campaign_id": str(item["campaign_id"]),
+                                "fb_account_id": str(item["fb_account_id"]),
+                                "action_type": "auto_launch",
+                                "details": {
+                                    "launch_type": item["launch_type"],
+                                    "target_budget": target_budget,
+                                    "partial_state": True,
+                                    "budget_set": True,
+                                    "resumed": False,
+                                    "analysis_data": item.get("analysis_data", {}),
+                                },
+                                "success": False,
+                            })
+                        except Exception as log_err:
+                            logger.warning(f"Failed to log partial auto_launch action: {log_err}")
                         failed += 1
                         continue
 
@@ -521,18 +524,21 @@ class AutoLauncher:
                         "current_budget": target_budget,
                     })
 
-                    # Log action
-                    db.create_action_log({
-                        "campaign_id": str(item["campaign_id"]),
-                        "fb_account_id": str(item["fb_account_id"]),
-                        "action_type": "auto_launch",
-                        "details": {
-                            "launch_type": item["launch_type"],
-                            "target_budget": target_budget,
-                            "analysis_data": item.get("analysis_data", {}),
-                        },
-                        "success": True,
-                    })
+                    # Log action (non-critical — don't fail launch on log error)
+                    try:
+                        db.create_action_log({
+                            "campaign_id": str(item["campaign_id"]),
+                            "fb_account_id": str(item["fb_account_id"]),
+                            "action_type": "auto_launch",
+                            "details": {
+                                "launch_type": item["launch_type"],
+                                "target_budget": target_budget,
+                                "analysis_data": item.get("analysis_data", {}),
+                            },
+                            "success": True,
+                        })
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log auto_launch action: {log_err}")
 
                     launched += 1
                     logger.info(f"Auto-launched: {item['fb_campaign_name']} (${target_budget})")
