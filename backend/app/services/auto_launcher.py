@@ -249,8 +249,8 @@ class AutoLauncher:
                 # Get Keitaro data
                 k2d = stats_2d.get(fc.fb_campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
 
-                # Skip campaigns with no Keitaro data, unless never launched
-                if launch_count > 0 and fc.fb_campaign_id not in stats_2d:
+                # Only consider campaigns with recent Keitaro activity (last 2 days)
+                if fc.fb_campaign_id not in stats_2d:
                     skipped_reasons["no_keitaro_data"] += 1
                     logger.debug(f"  skip no_keitaro: {fc.name} (fb_id={fc.fb_campaign_id})")
                     continue
