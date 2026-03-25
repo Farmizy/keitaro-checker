@@ -53,7 +53,13 @@ class AutoLauncher:
                 return None  # was good but recent launches failed → skip
             return "proven"
 
-        # Rules 2-3: Testing — CPC-based progressive thresholds
+        # Rules 2-4: Testing — CPC-based progressive thresholds
+        if launch_count_5d == 0:
+            # Never auto-launched — treat as first test with CPC check
+            if cpc <= CPC_THRESHOLD_LAUNCH_1:
+                return "new"
+            return None  # skip, don't blacklist
+
         if launch_count_5d == 1:
             if cpc <= CPC_THRESHOLD_LAUNCH_1:
                 return "new"
@@ -64,10 +70,8 @@ class AutoLauncher:
                 return "new"
             return "blacklist"
 
-        # 0 launches in 5 days (and not proven) or 3+ → skip
-        if launch_count_5d >= 3:
-            return "blacklist"
-        return None
+        # 3+ launches → blacklist
+        return "blacklist"
 
     async def run_analysis(self) -> None:
         """Analyze campaigns for all users. Runs at 23:00 MSK."""
@@ -158,8 +162,10 @@ class AutoLauncher:
             all_fbtool_campaigns: list[FbtoolCampaign] = []
             for account_id in fbtool_account_ids:
                 try:
-                    # Fetch with wide date range for analysis
-                    campaigns = await fbtool.get_campaigns(account_id, today_str)
+                    # Fetch with 7-day range so CPC reflects real data, not just today
+                    campaigns = await fbtool.get_campaigns(
+                        account_id, today_str, date_from=wide_start,
+                    )
                     all_fbtool_campaigns.extend(campaigns)
                 except Exception as e:
                     logger.error(f"Failed to fetch campaigns for fbtool account {account_id}: {e}")

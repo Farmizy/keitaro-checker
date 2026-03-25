@@ -88,17 +88,20 @@ class FbtoolClient:
         self,
         account_id: int,
         date: str,
+        date_from: str | None = None,
     ) -> list[FbtoolCampaign]:
-        """Fetch campaign-level statistics for a given date via AJAX JSON API.
+        """Fetch campaign-level statistics for a date or date range via AJAX JSON API.
 
         Args:
             account_id: fbtool account ID (e.g. 18856714)
-            date: Date string YYYY-MM-DD
+            date: End date string YYYY-MM-DD
+            date_from: Start date string YYYY-MM-DD (defaults to date for single day)
         """
+        start = date_from or date
         url = (
             f"{BASE_URL}/ajax/get-statistics"
             f"?id={account_id}"
-            f"&dates={date}+-+{date}"
+            f"&dates={start}+-+{date}"
             f"&status=all"
             f"&currency=USD"
             f"&adaccount_status=all"

@@ -102,12 +102,20 @@ class TestClassifyCampaign:
         )
         assert result == "blacklist"
 
-    # --- 0 launches in 5 days (not proven) → skip ---
+    # --- 0 launches in 5 days: first test with CPC check ---
 
-    def test_0_launches_not_proven(self):
-        """0 launches in 5 days, not proven → skip (None)."""
+    def test_0_launches_good_cpc(self):
+        """0 launches, CPC=$0.30 (< $0.50) → first test."""
         result = AutoLauncher.classify_campaign(
             leads_7d=0, roi_7d=0, launch_count_5d=0, cpc=0.30,
+            last_2_launches_failed=False, settings=DEFAULT_SETTINGS,
+        )
+        assert result == "new"
+
+    def test_0_launches_high_cpc(self):
+        """0 launches, CPC=$0.60 (> $0.50) → skip (None, no blacklist)."""
+        result = AutoLauncher.classify_campaign(
+            leads_7d=0, roi_7d=0, launch_count_5d=0, cpc=0.60,
             last_2_launches_failed=False, settings=DEFAULT_SETTINGS,
         )
         assert result is None
