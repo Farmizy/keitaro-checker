@@ -16,10 +16,11 @@ from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
-# Progressive CPC thresholds per relaunch
-CPC_THRESHOLD_LAUNCH_1 = 0.75  # After 1st launch: relaunch only if CPC ≤ $0.75
-CPC_THRESHOLD_LAUNCH_2 = 0.35  # After 2nd launch: relaunch only if CPC ≤ $0.35
-MAX_LAUNCHES = 3  # Max total launches (1 initial + 2 relaunches)
+# CPC thresholds per relaunch (5-day window)
+CPC_THRESHOLD_LAUNCH_1 = 0.50  # After 1st launch: relaunch if CPC ≤ $0.50
+CPC_THRESHOLD_LAUNCH_2 = 0.25  # After 2nd launch: relaunch if CPC ≤ $0.25
+LAUNCH_WINDOW_DAYS = 5  # Count launches in this window
+ROI_WINDOW_DAYS = 7  # Check ROI over this period
 
 
 class AutoLauncher:
@@ -28,43 +29,45 @@ class AutoLauncher:
 
     @staticmethod
     def classify_campaign(
-        leads_2d: int,
-        roi_2d: float,
-        launch_count: int,
+        leads_7d: int,
+        roi_7d: float,
+        launch_count_5d: int,
         cpc: float,
+        last_2_launches_failed: bool,
         settings: dict,
     ) -> str | None:
         """Pure classification logic. Returns 'new', 'proven', 'blacklist', or None.
 
-        Progressive relaunch strategy:
-        - Proven (leads + positive ROI) → always relaunch
-        - launch_count=0 → first test, no CPC check
-        - launch_count=1 → relaunch if CPC ≤ $0.75
-        - launch_count=2 → relaunch if CPC ≤ $0.35
-        - launch_count≥3 → blacklist (forget)
+        Rules:
+        1. Proven: 7-day ROI positive + has leads → relaunch
+           Exception: last 2 launches both had loss + 0 leads → skip
+        2. 1 launch in 5 days + CPC ≤ $0.50 → relaunch
+        3. 2 launches in 5 days + CPC ≤ $0.25 → relaunch
+        4. Everything else → skip
         """
         min_roi = float(settings.get("min_roi_threshold", 0))
 
-        # Proven: has leads AND positive ROI → always relaunch
-        if leads_2d > 0 and roi_2d > min_roi:
+        # Rule 1: Proven — 7-day positive ROI
+        if leads_7d > 0 and roi_7d > min_roi:
+            if last_2_launches_failed:
+                return None  # was good but recent launches failed → skip
             return "proven"
 
-        # Not proven — progressive CPC thresholds
-        if launch_count == 0:
-            return "new"  # First test
-
-        if launch_count == 1:
+        # Rules 2-3: Testing — CPC-based progressive thresholds
+        if launch_count_5d == 1:
             if cpc <= CPC_THRESHOLD_LAUNCH_1:
                 return "new"
             return "blacklist"
 
-        if launch_count == 2:
+        if launch_count_5d == 2:
             if cpc <= CPC_THRESHOLD_LAUNCH_2:
                 return "new"
             return "blacklist"
 
-        # 3+ launches without proving → blacklist
-        return "blacklist"
+        # 0 launches in 5 days (and not proven) or 3+ → skip
+        if launch_count_5d >= 3:
+            return "blacklist"
+        return None
 
     async def run_analysis(self) -> None:
         """Analyze campaigns for all users. Runs at 23:00 MSK."""
@@ -161,7 +164,7 @@ class AutoLauncher:
                 except Exception as e:
                     logger.error(f"Failed to fetch campaigns for fbtool account {account_id}: {e}")
 
-            # 3. Get Keitaro stats
+            # 3. Get Keitaro stats (7-day window for ROI)
             await keitaro.ensure_authenticated()
 
             # If analysis runs after midnight but before launch_hour,
@@ -171,12 +174,15 @@ class AutoLauncher:
             else:
                 effective_today = now.date()
 
-            date_2d_from = (effective_today - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_7d_from = (effective_today - timedelta(days=ROI_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
             date_to = effective_today.strftime("%Y-%m-%d")
 
-            stats_2d = await keitaro.get_all_campaign_stats_by_period(
-                date_from=date_2d_from, date_to=date_to,
+            stats_7d = await keitaro.get_all_campaign_stats_by_period(
+                date_from=date_7d_from, date_to=date_to,
             )
+
+            # Launch window date for counting recent launches
+            launch_window_from = (effective_today - timedelta(days=LAUNCH_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
 
             # 4. Get blacklist, DB campaigns, and DB accounts (for auto-sync)
             blacklisted_ids = db.get_blacklisted_campaign_ids()
@@ -193,7 +199,7 @@ class AutoLauncher:
             logger.info(
                 f"Auto-launcher: {len(all_fbtool_campaigns)} fbtool campaigns, "
                 f"{len(db_campaigns)} DB campaigns, "
-                f"{len(stats_2d)} in stats_2d, "
+                f"{len(stats_7d)} in stats_7d, "
                 f"{len(blacklisted_ids)} blacklisted"
             )
 
@@ -242,31 +248,46 @@ class AutoLauncher:
                     logger.debug(f"  skip error_account: {fc.name} (account={fc.account_name})")
                     continue
 
-                # Get launch count and CPC from fbtool data
-                launch_count = db.count_campaign_launches(db_camp["id"])
+                # Get launch count (5-day window) and CPC from fbtool
+                launch_count_5d = db.count_campaign_launches_since(
+                    db_camp["id"], launch_window_from,
+                )
                 cpc = (fc.spend / fc.link_clicks) if fc.link_clicks > 0 else 0
 
-                # Get Keitaro data
-                k2d = stats_2d.get(fc.fb_campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
+                # Get 7-day Keitaro data
+                k7d = stats_7d.get(fc.fb_campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
 
-                # Only consider campaigns with recent Keitaro activity (last 2 days)
-                if fc.fb_campaign_id not in stats_2d:
+                # Must have Keitaro data in 7-day window
+                if fc.fb_campaign_id not in stats_7d:
                     skipped_reasons["no_keitaro_data"] += 1
                     logger.debug(f"  skip no_keitaro: {fc.name} (fb_id={fc.fb_campaign_id})")
                     continue
 
+                # Check if last 2 launches both failed (loss + 0 leads)
+                last_2_launches_failed = False
+                if launch_count_5d >= 2:
+                    last_launches = db.get_last_launches(db_camp["id"], limit=2)
+                    if len(last_launches) >= 2:
+                        last_2_launches_failed = all(
+                            (l.get("analysis_data") or {}).get("leads_7d", 0) == 0
+                            and (l.get("analysis_data") or {}).get("roi_7d", 0) <= 0
+                            for l in last_launches
+                        )
+
                 launch_type = self.classify_campaign(
-                    leads_2d=k2d["conversions"],
-                    roi_2d=k2d["roi"],
-                    launch_count=launch_count,
+                    leads_7d=k7d["conversions"],
+                    roi_7d=k7d["roi"],
+                    launch_count_5d=launch_count_5d,
                     cpc=cpc,
+                    last_2_launches_failed=last_2_launches_failed,
                     settings=settings,
                 )
 
                 logger.debug(
                     f"  classify: {fc.name} → {launch_type} "
-                    f"(launches={launch_count}, cpc=${cpc:.2f}, "
-                    f"spend_2d={k2d['cost']}, leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
+                    f"(launches_5d={launch_count_5d}, cpc=${cpc:.2f}, "
+                    f"last2_failed={last_2_launches_failed}, "
+                    f"spend_7d={k7d['cost']}, leads_7d={k7d['conversions']}, roi_7d={k7d['roi']})"
                 )
 
                 if launch_type is None:
@@ -278,7 +299,7 @@ class AutoLauncher:
                         "campaign_id": db_camp["id"],
                         "fb_campaign_id": fc.fb_campaign_id,
                         "fb_campaign_name": fc.name,
-                        "reason": "zero_leads_2d",
+                        "reason": f"cpc_too_high_{launch_count_5d}launches",
                     })
                     blacklisted_count += 1
                     continue
@@ -292,11 +313,11 @@ class AutoLauncher:
                     "launch_type": launch_type,
                     "target_budget": float(settings.get("starting_budget", 30)),
                     "analysis_data": {
-                        "roi_2d": k2d["roi"],
-                        "leads_2d": k2d["conversions"],
-                        "spend_2d": k2d["cost"],
+                        "roi_7d": k7d["roi"],
+                        "leads_7d": k7d["conversions"],
+                        "spend_7d": k7d["cost"],
                         "cpc": round(cpc, 2),
-                        "launch_count": launch_count,
+                        "launch_count_5d": launch_count_5d,
                     },
                     "status": "pending",
                     "launch_date": str(launch_date),
@@ -578,10 +599,10 @@ class AutoLauncher:
         lines = [f"\U0001f4cb Auto-Launcher: план на {launch_date}\n"]
 
         if new_items:
-            lines.append(f"\n\U0001f195 Новые (тест): {len(new_items)}")
+            lines.append(f"\n\U0001f195 Тест (CPC): {len(new_items)}")
             for item in new_items[:10]:
                 ad = item["analysis_data"]
-                launch_num = ad.get("launch_count", 0) + 1
+                launch_num = ad.get("launch_count_5d", 0) + 1
                 cpc_str = f"${ad.get('cpc', 0):.2f}" if ad.get("cpc") is not None else "n/a"
                 lines.append(
                     f"  \u2022 {item['fb_campaign_name']} "
@@ -589,12 +610,12 @@ class AutoLauncher:
                 )
 
         if proven_items:
-            lines.append(f"\n\u2705 Проверенные: {len(proven_items)}")
+            lines.append(f"\n\u2705 Проверенные (7д ROI+): {len(proven_items)}")
             for item in proven_items[:10]:
                 ad = item["analysis_data"]
                 lines.append(
                     f"  \u2022 {item['fb_campaign_name']} "
-                    f"(ROI: {ad.get('roi_2d', 0):.0f}%, leads: {ad.get('leads_2d', 0)})"
+                    f"(ROI: {ad.get('roi_7d', 0):.0f}%, leads: {ad.get('leads_7d', 0)})"
                 )
 
         if error_accounts:

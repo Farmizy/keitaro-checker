@@ -446,6 +446,31 @@ class DatabaseService:
         )
         return response.count or 0
 
+    def count_campaign_launches_since(self, campaign_id: str, since_date: str) -> int:
+        """Count launches since a given date (inclusive)."""
+        response = (
+            self.client.table("auto_launch_queue")
+            .select("id", count="exact")
+            .eq("campaign_id", campaign_id)
+            .eq("status", "launched")
+            .gte("launch_date", since_date)
+            .execute()
+        )
+        return response.count or 0
+
+    def get_last_launches(self, campaign_id: str, limit: int = 2) -> list[dict]:
+        """Get last N launches with analysis_data, newest first."""
+        response = (
+            self.client.table("auto_launch_queue")
+            .select("id, launch_date, analysis_data, status")
+            .eq("campaign_id", campaign_id)
+            .eq("status", "launched")
+            .order("launch_date", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+
     def clear_old_launch_queue(self, before_date: str) -> None:
         """Delete all queue entries with launch_date before the given date
         (including stale pending items that were never launched)."""
