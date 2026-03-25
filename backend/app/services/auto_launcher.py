@@ -582,7 +582,7 @@ class AutoLauncher:
             for item in new_items[:10]:
                 ad = item["analysis_data"]
                 launch_num = ad.get("launch_count", 0) + 1
-                cpc_str = f"${ad.get('cpc', 0):.2f}" if ad.get("cpc") else "n/a"
+                cpc_str = f"${ad.get('cpc', 0):.2f}" if ad.get("cpc") is not None else "n/a"
                 lines.append(
                     f"  \u2022 {item['fb_campaign_name']} "
                     f"(запуск #{launch_num}, CPC: {cpc_str})"
