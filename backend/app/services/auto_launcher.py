@@ -16,10 +16,10 @@ from app.services.telegram_notifier import TelegramNotifier
 
 MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
 
-# Max CPC ($/click) — campaigns with higher CPC are not relaunched
-MAX_CPC_FOR_RELAUNCH = 0.70
-# Max times a new campaign can be auto-launched (0 or 1 → ok, 2+ → skip)
-MAX_LAUNCHES = 2
+# Progressive CPC thresholds per relaunch
+CPC_THRESHOLD_LAUNCH_1 = 0.75  # After 1st launch: relaunch only if CPC ≤ $0.75
+CPC_THRESHOLD_LAUNCH_2 = 0.35  # After 2nd launch: relaunch only if CPC ≤ $0.35
+MAX_LAUNCHES = 3  # Max total launches (1 initial + 2 relaunches)
 
 
 class AutoLauncher:
@@ -30,27 +30,41 @@ class AutoLauncher:
     def classify_campaign(
         leads_2d: int,
         roi_2d: float,
-        is_new: bool,
+        launch_count: int,
+        cpc: float,
         settings: dict,
     ) -> str | None:
-        """Pure classification logic. Returns 'new', 'proven', 'blacklist', or None."""
+        """Pure classification logic. Returns 'new', 'proven', 'blacklist', or None.
+
+        Progressive relaunch strategy:
+        - Proven (leads + positive ROI) → always relaunch
+        - launch_count=0 → first test, no CPC check
+        - launch_count=1 → relaunch if CPC ≤ $0.75
+        - launch_count=2 → relaunch if CPC ≤ $0.35
+        - launch_count≥3 → blacklist (forget)
+        """
         min_roi = float(settings.get("min_roi_threshold", 0))
 
-        if is_new:
-            # New campaign with leads and positive ROI → proven
-            if leads_2d > 0 and roi_2d > min_roi:
-                return "proven"
-            # New campaign — always relaunch for testing
-            # (ladder rules will stop it if spend/CPL is too high)
-            return "new"
-
-        # Established campaign
-        if leads_2d == 0:
-            return "blacklist"
+        # Proven: has leads AND positive ROI → always relaunch
         if leads_2d > 0 and roi_2d > min_roi:
             return "proven"
-        # Has leads but negative/low ROI → skip, don't blacklist
-        return None
+
+        # Not proven — progressive CPC thresholds
+        if launch_count == 0:
+            return "new"  # First test
+
+        if launch_count == 1:
+            if cpc <= CPC_THRESHOLD_LAUNCH_1:
+                return "new"
+            return "blacklist"
+
+        if launch_count == 2:
+            if cpc <= CPC_THRESHOLD_LAUNCH_2:
+                return "new"
+            return "blacklist"
+
+        # 3+ launches without proving → blacklist
+        return "blacklist"
 
     async def run_analysis(self) -> None:
         """Analyze campaigns for all users. Runs at 23:00 MSK."""
@@ -154,21 +168,14 @@ class AutoLauncher:
             # "today" has almost no data — use yesterday as the end date
             if now.hour < launch_hour:
                 effective_today = (now - timedelta(days=1)).date()
-                recent_days = 4  # after midnight: 4 days window
             else:
                 effective_today = now.date()
-                recent_days = 3  # normal: 3 days window
 
             date_2d_from = (effective_today - timedelta(days=1)).strftime("%Y-%m-%d")
-            date_recent_from = (effective_today - timedelta(days=recent_days - 1)).strftime("%Y-%m-%d")
             date_to = effective_today.strftime("%Y-%m-%d")
 
             stats_2d = await keitaro.get_all_campaign_stats_by_period(
                 date_from=date_2d_from, date_to=date_to,
-            )
-            # Recent stats to determine "new" campaigns (3 or 4 days)
-            stats_recent = await keitaro.get_all_campaign_stats_by_period(
-                date_from=date_recent_from, date_to=date_to,
             )
 
             # 4. Get blacklist, DB campaigns, and DB accounts (for auto-sync)
@@ -235,33 +242,15 @@ class AutoLauncher:
                     logger.debug(f"  skip error_account: {fc.name} (account={fc.account_name})")
                     continue
 
-                # Campaign is "new" if it has data in Keitaro recent window
-                is_new = fc.fb_campaign_id in stats_recent
-
-                # For new campaigns: check launch count and CPC limits
-                if is_new:
-                    launch_count = db.count_campaign_launches(db_camp["id"])
-                    cpc = (fc.spend / fc.link_clicks) if fc.link_clicks > 0 else 0
-                    if launch_count >= MAX_LAUNCHES:
-                        skipped_reasons["classify_none"] += 1
-                        logger.debug(
-                            f"  skip max_launches: {fc.name} "
-                            f"(launched {launch_count}x, max {MAX_LAUNCHES})"
-                        )
-                        continue
-                    if cpc > MAX_CPC_FOR_RELAUNCH:
-                        skipped_reasons["classify_none"] += 1
-                        logger.debug(
-                            f"  skip high_cpc: {fc.name} "
-                            f"(cpc=${cpc:.2f} > ${MAX_CPC_FOR_RELAUNCH})"
-                        )
-                        continue
+                # Get launch count and CPC from fbtool data
+                launch_count = db.count_campaign_launches(db_camp["id"])
+                cpc = (fc.spend / fc.link_clicks) if fc.link_clicks > 0 else 0
 
                 # Get Keitaro data
                 k2d = stats_2d.get(fc.fb_campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
 
-                # Not in 2-day data → skip (recency filter), but allow new campaigns
-                if not is_new and k2d["cost"] == 0 and fc.fb_campaign_id not in stats_2d:
+                # Skip campaigns with no Keitaro data, unless never launched
+                if launch_count > 0 and fc.fb_campaign_id not in stats_2d:
                     skipped_reasons["no_keitaro_data"] += 1
                     logger.debug(f"  skip no_keitaro: {fc.name} (fb_id={fc.fb_campaign_id})")
                     continue
@@ -269,13 +258,14 @@ class AutoLauncher:
                 launch_type = self.classify_campaign(
                     leads_2d=k2d["conversions"],
                     roi_2d=k2d["roi"],
-                    is_new=is_new,
+                    launch_count=launch_count,
+                    cpc=cpc,
                     settings=settings,
                 )
 
                 logger.debug(
                     f"  classify: {fc.name} → {launch_type} "
-                    f"(is_new={is_new}, "
+                    f"(launches={launch_count}, cpc=${cpc:.2f}, "
                     f"spend_2d={k2d['cost']}, leads_2d={k2d['conversions']}, roi_2d={k2d['roi']})"
                 )
 
@@ -305,6 +295,8 @@ class AutoLauncher:
                         "roi_2d": k2d["roi"],
                         "leads_2d": k2d["conversions"],
                         "spend_2d": k2d["cost"],
+                        "cpc": round(cpc, 2),
+                        "launch_count": launch_count,
                     },
                     "status": "pending",
                     "launch_date": str(launch_date),
@@ -588,7 +580,13 @@ class AutoLauncher:
         if new_items:
             lines.append(f"\n\U0001f195 Новые (тест): {len(new_items)}")
             for item in new_items[:10]:
-                lines.append(f"  \u2022 {item['fb_campaign_name']}")
+                ad = item["analysis_data"]
+                launch_num = ad.get("launch_count", 0) + 1
+                cpc_str = f"${ad.get('cpc', 0):.2f}" if ad.get("cpc") else "n/a"
+                lines.append(
+                    f"  \u2022 {item['fb_campaign_name']} "
+                    f"(запуск #{launch_num}, CPC: {cpc_str})"
+                )
 
         if proven_items:
             lines.append(f"\n\u2705 Проверенные: {len(proven_items)}")
