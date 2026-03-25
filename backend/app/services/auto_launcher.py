@@ -240,6 +240,7 @@ class AutoLauncher:
                 # Only stopped/paused campaigns
                 if fc.effective_status == "ACTIVE":
                     skipped_reasons["active"] += 1
+                    logger.debug(f"  skip active: {fc.name} (status={fc.effective_status})")
                     continue
 
                 # Skip error accounts
