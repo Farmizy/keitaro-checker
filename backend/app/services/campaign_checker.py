@@ -101,9 +101,15 @@ class CampaignChecker:
             now = datetime.now(MOSCOW_TZ)
             today = now.strftime("%Y-%m-%d")
 
-            # 1. Sync accounts from fbtool
+            # 1. Sync accounts from fbtool (also updates fbtool_account_ids)
             logger.info("Syncing accounts from fbtool...")
-            await self._sync_accounts_from_fbtool(fbtool, db)
+            synced_fbtool_ids = await self._sync_accounts_from_fbtool(fbtool, db)
+            if synced_fbtool_ids:
+                new_ids = sorted(set(synced_fbtool_ids) - set(fbtool_account_ids))
+                if new_ids:
+                    fbtool_account_ids = sorted(set(fbtool_account_ids) | set(synced_fbtool_ids))
+                    db.update_user_settings({"fbtool_account_ids": fbtool_account_ids})
+                    logger.info(f"Auto-added fbtool account IDs: {new_ids}")
             db_accounts = db.get_active_accounts()
             logger.info(f"Got {len(db_accounts)} accounts from DB")
 
@@ -320,8 +326,8 @@ class CampaignChecker:
         return "action" if success else "checked"
 
     @staticmethod
-    async def _sync_accounts_from_fbtool(fbtool: FbtoolClient, db: DatabaseService):
-        """Pull accounts from fbtool.pro and upsert into DB."""
+    async def _sync_accounts_from_fbtool(fbtool: FbtoolClient, db: DatabaseService) -> list[int]:
+        """Pull accounts from fbtool.pro and upsert into DB. Returns list of fbtool IDs."""
         fbtool_accounts = await fbtool.get_accounts()
         for fa in fbtool_accounts:
             account_data = {
@@ -333,6 +339,7 @@ class CampaignChecker:
             if fa.primary_ad_account_id:
                 account_data["account_id"] = fa.primary_ad_account_id
             db.upsert_account_by_fbtool_id(fa.fbtool_id, account_data)
+        return [fa.fbtool_id for fa in fbtool_accounts]
 
     @staticmethod
     def _sync_campaign(db: DatabaseService, fc: FbtoolCampaign, fb_account_id: str) -> dict:
