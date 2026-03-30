@@ -290,3 +290,127 @@ class TestEdgeCases:
         )
         assert result.type == ActionType.SET_BUDGET
         assert result.target_budget == 50
+
+
+# ── ABO adset budget ladder ──────────────────────────────────
+
+# Small budget (≤$20): 1 lead → $20, 3 leads → $75, 4 → $150, 6 → $250
+ADSET_STEPS_SMALL = [(6, 250), (4, 150), (3, 75), (1, 20)]
+# Larger budget (>$20): 2 leads → $75, 4 → $150, 6 → $250
+ADSET_STEPS_LARGE = [(6, 250), (4, 150), (2, 75)]
+
+
+class TestAdsetLadderSmallBudget:
+    """Adset starting at ≤$20 — extra step: 1 lead → $20."""
+
+    def test_1_lead_budget_10_raises_to_20(self):
+        result = evaluate(
+            _state(spend=3, leads=1, budget=10),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 20
+
+    def test_1_lead_budget_20_waits(self):
+        # Already at $20, 1 lead — wait for more leads (need 3 for $75)
+        result = evaluate(
+            _state(spend=5, leads=1, budget=20),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.WAIT
+
+    def test_2_leads_budget_20_waits(self):
+        # 2 leads at $20 — still need 3 for next step
+        result = evaluate(
+            _state(spend=10, leads=2, budget=20),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.WAIT
+
+    def test_3_leads_budget_20_raises_to_75(self):
+        result = evaluate(
+            _state(spend=10, leads=3, budget=20),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 75
+
+    def test_4_leads_raises_to_150(self):
+        result = evaluate(
+            _state(spend=15, leads=4, budget=75),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 150
+
+    def test_6_leads_raises_to_250(self):
+        result = evaluate(
+            _state(spend=20, leads=6, budget=150),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 250
+
+    def test_stop_at_7_spend_0_leads(self):
+        # Same stop thresholds as CBO
+        result = evaluate(
+            _state(spend=7, leads=0, budget=10),
+            NOW,
+            budget_steps=ADSET_STEPS_SMALL,
+        )
+        assert result.type == ActionType.STOP
+
+
+class TestAdsetLadderLargeBudget:
+    """Adset starting at >$20 — 2 leads → $75, then standard."""
+
+    def test_1_lead_budget_25_waits(self):
+        # $25 budget, 1 lead — no step for 1 lead in this set
+        result = evaluate(
+            _state(spend=5, leads=1, budget=25),
+            NOW,
+            budget_steps=ADSET_STEPS_LARGE,
+        )
+        assert result.type == ActionType.WAIT
+
+    def test_2_leads_budget_25_raises_to_75(self):
+        result = evaluate(
+            _state(spend=8, leads=2, budget=25),
+            NOW,
+            budget_steps=ADSET_STEPS_LARGE,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 75
+
+    def test_4_leads_raises_to_150(self):
+        result = evaluate(
+            _state(spend=15, leads=4, budget=75),
+            NOW,
+            budget_steps=ADSET_STEPS_LARGE,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 150
+
+    def test_6_leads_raises_to_250(self):
+        result = evaluate(
+            _state(spend=20, leads=6, budget=150),
+            NOW,
+            budget_steps=ADSET_STEPS_LARGE,
+        )
+        assert result.type == ActionType.SET_BUDGET
+        assert result.target_budget == 250
+
+    def test_budget_never_decreases(self):
+        # Budget already $75, 2 leads — $75 not < $75 → WAIT
+        result = evaluate(
+            _state(spend=10, leads=2, budget=75),
+            NOW,
+            budget_steps=ADSET_STEPS_LARGE,
+        )
+        assert result.type == ActionType.WAIT

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
-from app.services.fbtool_client import FbtoolClient, FbtoolCampaign, FbtoolAuthError
+from app.services.fbtool_client import FbtoolClient, FbtoolCampaign, FbtoolAdset, FbtoolAuthError
 from app.services.keitaro_client import KeitaroClient, KeitaroLoginBlocked
 from app.services.database_service import DatabaseService
 from app.services.action_executor import ActionExecutor
@@ -116,24 +116,31 @@ class CampaignChecker:
             # 2. Fetch campaigns from fbtool for each account
             logger.info("Fetching campaigns from fbtool...")
             all_fbtool_campaigns: list[FbtoolCampaign] = []
+            all_fbtool_adsets: list[FbtoolAdset] = []
             for account_id in fbtool_account_ids:
                 try:
-                    campaigns = await fbtool.get_campaigns(account_id, today)
+                    campaigns, adsets = await fbtool.get_campaigns(account_id, today)
                     all_fbtool_campaigns.extend(campaigns)
+                    all_fbtool_adsets.extend(adsets)
                 except Exception as e:
                     errors_count += 1
                     logger.error(f"Failed to fetch campaigns for fbtool account {account_id}: {e}")
 
-            logger.info(f"Got {len(all_fbtool_campaigns)} campaigns from fbtool")
+            logger.info(f"Got {len(all_fbtool_campaigns)} CBO campaigns + {len(all_fbtool_adsets)} ABO adsets from fbtool")
 
-            # 3. Fetch conversions from Keitaro (grouped by campaign_id via sub_id_2)
+            # 3. Fetch conversions from Keitaro
             logger.info("Fetching conversions from Keitaro...")
             keitaro_conversions: dict[str, int] = {}
+            keitaro_adset_conversions: dict[str, int] = {}
             keitaro_available = True
             try:
                 await keitaro.ensure_authenticated()
                 keitaro_conversions = await keitaro.get_all_conversions_by_campaign()
                 logger.info(f"Got conversions for {len(keitaro_conversions)} campaign IDs from Keitaro")
+                # Fetch adset-level conversions only if we have ABO adsets
+                if all_fbtool_adsets:
+                    keitaro_adset_conversions = await keitaro.get_all_conversions_by_adset()
+                    logger.info(f"Got conversions for {len(keitaro_adset_conversions)} adset IDs from Keitaro")
             except KeitaroLoginBlocked as e:
                 keitaro_available = False
                 logger.warning(f"Keitaro login blocked (rate limit), skipping: {e}")
@@ -167,7 +174,7 @@ class CampaignChecker:
             else:
                 logger.info("No custom rules found, using defaults")
 
-            # 5. Process each campaign
+            # 5. Process each CBO campaign
             for fc in all_fbtool_campaigns:
                 try:
                     result = await self._process_campaign(
@@ -183,6 +190,23 @@ class CampaignChecker:
                 except Exception as e:
                     errors_count += 1
                     logger.error(f"Error processing campaign {fc.fb_campaign_id}: {e}")
+
+            # 6. Process each ABO adset
+            for adset in all_fbtool_adsets:
+                try:
+                    result = await self._process_adset(
+                        db, executor, notifier,
+                        adset, account_by_fbtool_id, account_by_name,
+                        keitaro_adset_conversions, now, rule_kwargs,
+                    )
+                    if result == "checked":
+                        campaigns_checked += 1
+                    elif result == "action":
+                        campaigns_checked += 1
+                        actions_taken += 1
+                except Exception as e:
+                    errors_count += 1
+                    logger.error(f"Error processing adset {adset.fb_adset_id}: {e}")
 
             db.update_check_run(run_id, {
                 "status": "completed",
@@ -324,6 +348,156 @@ class CampaignChecker:
                 logger.error(f"Telegram notification failed: {e}")
 
         return "action" if success else "checked"
+
+    async def _process_adset(
+        self,
+        db: DatabaseService,
+        executor: ActionExecutor,
+        notifier: TelegramNotifier | None,
+        adset: FbtoolAdset,
+        account_by_fbtool_id: dict,
+        account_by_name: dict,
+        keitaro_adset_conversions: dict[str, int],
+        now: datetime,
+        rule_kwargs: dict | None = None,
+    ) -> str:
+        """Process a single ABO adset. Returns 'skipped', 'checked', or 'action'."""
+
+        # Match to DB account
+        db_account = None
+        if adset.fbtool_account_id:
+            db_account = account_by_fbtool_id.get(adset.fbtool_account_id)
+        if not db_account:
+            db_account = account_by_name.get(adset.account_name)
+        if not db_account:
+            logger.warning(
+                f"Adset {adset.name} ({adset.fb_adset_id}): "
+                f"account '{adset.account_name}' not found in DB — skipped"
+            )
+            return "skipped"
+
+        fb_account_id = db_account["id"]
+
+        # Sync adset to DB
+        db_campaign = self._sync_adset(db, adset, fb_account_id)
+
+        # Skip non-active adsets
+        if adset.effective_status != "ACTIVE":
+            logger.debug(f"Adset {adset.name}: status {adset.effective_status} — skipped")
+            return "skipped"
+
+        if not db_campaign.get("is_managed", True):
+            logger.debug(f"Adset {adset.name}: not managed — skipped")
+            return "skipped"
+        if db_campaign.get("status") == "stopped":
+            logger.debug(f"Adset {adset.name}: stopped in DB — skipped")
+            return "skipped"
+
+        # Leads: prefer Keitaro (sub_id_3 = adset_id), fallback to fbtool
+        keitaro_leads = keitaro_adset_conversions.get(adset.fb_adset_id, None)
+        if keitaro_leads is not None:
+            leads = keitaro_leads
+        else:
+            leads = adset.leads
+            if keitaro_adset_conversions:
+                logger.debug(
+                    f"Adset {adset.name}: no Keitaro data for adset_id "
+                    f"{adset.fb_adset_id}, using fbtool leads ({leads})"
+                )
+
+        state = CampaignState(
+            spend=adset.spend,
+            leads=leads,
+            current_budget=adset.daily_budget,
+            last_budget_change_at=_parse_dt(db_campaign.get("last_budget_change_at")),
+            link_clicks=adset.link_clicks,
+        )
+
+        # ABO budget steps depend on current budget
+        adset_rule_kwargs = dict(rule_kwargs or {})
+        if adset.daily_budget <= 20:
+            adset_rule_kwargs["budget_steps"] = [(6, 250), (4, 150), (3, 75), (1, 20)]
+        else:
+            adset_rule_kwargs["budget_steps"] = [(6, 250), (4, 150), (2, 75)]
+
+        action = evaluate(state, now, **adset_rule_kwargs)
+
+        if action.type == ActionType.WAIT:
+            return "checked"
+
+        logger.info(
+            f"Adset {adset.name} ({adset.fb_adset_id}) in campaign {adset.campaign_name}: "
+            f"spend=${adset.spend:.2f}, leads={leads} → {action.type.value}: {action.reason}"
+        )
+
+        success = await executor.execute(
+            action=action,
+            campaign_db_id=db_campaign["id"],
+            fb_campaign_id=adset.fb_campaign_id,
+            fbtool_account_id=adset.fbtool_account_id,
+            fb_account_id=fb_account_id,
+            fb_adset_id=adset.fb_adset_id,
+        )
+
+        # Notify on STOP / MANUAL_REVIEW
+        if action.type in (ActionType.STOP, ActionType.MANUAL_REVIEW) and notifier:
+            try:
+                label = "STOP" if action.type == ActionType.STOP else "Manual review"
+                await notifier.send(
+                    f"{label}: {adset.campaign_name} / {adset.name}\n"
+                    f"Spend: ${adset.spend:.2f}, Leads: {leads}\n"
+                    f"Reason: {action.reason}"
+                )
+            except Exception as e:
+                logger.error(f"Telegram notification failed: {e}")
+
+        return "action" if success else "checked"
+
+    @staticmethod
+    def _sync_adset(db: DatabaseService, adset: FbtoolAdset, fb_account_id: str) -> dict:
+        """Sync ABO adset data to DB as a campaign row with budget_level=adset."""
+        existing = db.get_campaign_by_adset_id(
+            str(fb_account_id), str(adset.fb_adset_id),
+        )
+
+        update_data = {
+            "fb_campaign_name": f"{adset.campaign_name} / {adset.name}",
+            "current_budget": adset.daily_budget,
+            "total_spend": adset.spend,
+            "leads_count": adset.leads,
+            "last_fb_sync": datetime.now(timezone.utc).isoformat(),
+            "budget_level": "adset",
+        }
+
+        if existing:
+            if existing.get("status") == "stopped" and adset.effective_status == "ACTIVE":
+                stopped_at = _parse_dt(existing.get("stopped_at"))
+                now_utc = datetime.now(timezone.utc)
+                if stopped_at and (now_utc - stopped_at).total_seconds() < 3600:
+                    logger.debug(
+                        f"Adset {adset.name}: stopped {int((now_utc - stopped_at).total_seconds() // 60)}m ago, "
+                        f"keeping stopped"
+                    )
+                else:
+                    logger.info(
+                        f"Adset {adset.name} ({adset.fb_adset_id}) was stopped but "
+                        f"restarted in FB — unlocking to active"
+                    )
+                    update_data["status"] = "active"
+            elif existing.get("status") != "stopped":
+                update_data["status"] = (
+                    "active" if adset.effective_status == "ACTIVE" else "paused"
+                )
+            return db.update_campaign(existing["id"], update_data)
+
+        # New adset entry
+        update_data.update({
+            "fb_account_id": str(fb_account_id),
+            "fb_campaign_id": str(adset.fb_campaign_id),
+            "fb_adset_id": str(adset.fb_adset_id),
+            "status": "active" if adset.effective_status == "ACTIVE" else "paused",
+        })
+        return db.upsert_adset(update_data)
 
     @staticmethod
     async def _sync_accounts_from_fbtool(fbtool: FbtoolClient, db: DatabaseService) -> list[int]:

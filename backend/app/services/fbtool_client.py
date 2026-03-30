@@ -41,6 +41,27 @@ class FbtoolCampaign:
 
 
 @dataclass
+class FbtoolAdset:
+    """Adset data for ABO campaigns (budget at adset level)."""
+    fb_adset_id: str             # Facebook adset ID (e.g. "6963228102368")
+    fb_campaign_id: str          # Parent campaign ID
+    name: str                    # Adset name
+    campaign_name: str           # Parent campaign name
+    daily_budget: float          # Adset daily budget
+    currency: str                # USD, EUR, GTQ, etc.
+    effective_status: str        # ACTIVE, PAUSED, CAMPAIGN_PAUSED, etc.
+    spend: float                 # Spend today
+    leads: int                   # FB leads today
+    link_clicks: int             # Link clicks today
+    impressions: int             # Impressions today
+    cpc: float = 0.0
+    cpl: float = 0.0
+    fb_ad_account_id: str = ""
+    account_name: str = ""
+    fbtool_account_id: int = 0
+
+
+@dataclass
 class FbtoolAccount:
     """Account data parsed from /accounts page."""
     fbtool_id: int               # e.g. 18856714
@@ -89,13 +110,13 @@ class FbtoolClient:
         account_id: int,
         date: str,
         date_from: str | None = None,
-    ) -> list[FbtoolCampaign]:
-        """Fetch campaign-level statistics for a date or date range via AJAX JSON API.
+    ) -> tuple[list[FbtoolCampaign], list[FbtoolAdset]]:
+        """Fetch campaign and adset statistics via AJAX JSON API.
 
-        Args:
-            account_id: fbtool account ID (e.g. 18856714)
-            date: End date string YYYY-MM-DD
-            date_from: Start date string YYYY-MM-DD (defaults to date for single day)
+        Returns:
+            Tuple of (CBO campaigns, ABO adsets).
+            CBO: campaign_daily_budget > 0 → aggregated by campaign.
+            ABO: campaign_daily_budget == 0, adset_daily_budget > 0 → aggregated by adset.
         """
         start = date_from or date
         url = (
@@ -262,15 +283,17 @@ class FbtoolClient:
     # ─── JSON Parsers ───────────────────────────────────────────
 
     @staticmethod
-    def _parse_statistics_json(data: Any, account_id: int) -> list[FbtoolCampaign]:
-        """Parse /ajax/get-statistics JSON into FbtoolCampaign list.
+    def _parse_statistics_json(data: Any, account_id: int) -> tuple[list[FbtoolCampaign], list[FbtoolAdset]]:
+        """Parse /ajax/get-statistics JSON into CBO campaigns + ABO adsets.
 
-        The JSON returns ad-level rows. We aggregate by campaign_id to get
-        campaign-level spend/leads/clicks/impressions.
+        The JSON returns ad-level rows. We split by budget type:
+        - CBO (campaign_daily_budget > 0): aggregate by campaign_id → FbtoolCampaign
+        - ABO (campaign_daily_budget == 0, adset_daily_budget > 0): aggregate by adset_id → FbtoolAdset
+
         Budget is in cents (campaign_daily_budget: "3000" = $30).
         """
         if not data or not isinstance(data, list):
-            return []
+            return [], []
 
         # Collect all rows from all groups
         all_rows: list[dict] = []
@@ -279,38 +302,71 @@ class FbtoolClient:
             all_rows.extend(rows)
 
         if not all_rows:
-            return []
+            return [], []
 
-        # Aggregate by campaign_id
+        # Separate CBO and ABO rows, aggregate
         campaigns_map: dict[str, dict] = {}
+        adsets_map: dict[str, dict] = {}
+
         for row in all_rows:
             cid = row.get("campaign_id") or row.get("main_param")
             if not cid:
                 continue
 
-            if cid not in campaigns_map:
-                budget_cents = int(row.get("campaign_daily_budget") or 0)
-                campaigns_map[cid] = {
-                    "fb_campaign_id": cid,
-                    "name": row.get("campaign_name", ""),
-                    "daily_budget": budget_cents / 100,
-                    "currency": row.get("currency", "USD"),
-                    "effective_status": row.get("campaign_effective_status", "UNKNOWN"),
-                    "fb_ad_account_id": row.get("ad_account_id", ""),
-                    "account_name": row.get("account_name", ""),
-                    "spend": 0.0,
-                    "leads": 0,
-                    "link_clicks": 0,
-                    "impressions": 0,
-                }
+            campaign_budget_cents = int(row.get("campaign_daily_budget") or 0)
+            adset_budget_cents = int(row.get("adset_daily_budget") or 0)
+            adset_id = row.get("adset_id", "")
 
-            agg = campaigns_map[cid]
-            agg["spend"] += float(row.get("spend") or 0)
-            agg["leads"] += int(row.get("leads") or 0)
-            agg["link_clicks"] += int(row.get("link_click") or 0)
-            agg["impressions"] += int(row.get("impressions") or 0)
+            is_abo = campaign_budget_cents == 0 and adset_budget_cents > 0 and adset_id
 
-        # Build FbtoolCampaign objects
+            spend = float(row.get("spend") or 0)
+            leads = int(row.get("leads") or 0)
+            link_clicks = int(row.get("link_click") or 0)
+            impressions = int(row.get("impressions") or 0)
+
+            if is_abo:
+                # ABO: aggregate by adset_id
+                if adset_id not in adsets_map:
+                    adsets_map[adset_id] = {
+                        "fb_adset_id": adset_id,
+                        "fb_campaign_id": cid,
+                        "name": row.get("adset_name", ""),
+                        "campaign_name": row.get("campaign_name", ""),
+                        "daily_budget": adset_budget_cents / 100,
+                        "currency": row.get("currency", "USD"),
+                        "effective_status": row.get("adset_effective_status", "UNKNOWN"),
+                        "fb_ad_account_id": row.get("ad_account_id", ""),
+                        "account_name": row.get("account_name", ""),
+                        "spend": 0.0,
+                        "leads": 0,
+                        "link_clicks": 0,
+                        "impressions": 0,
+                    }
+                agg = adsets_map[adset_id]
+            else:
+                # CBO: aggregate by campaign_id
+                if cid not in campaigns_map:
+                    campaigns_map[cid] = {
+                        "fb_campaign_id": cid,
+                        "name": row.get("campaign_name", ""),
+                        "daily_budget": campaign_budget_cents / 100,
+                        "currency": row.get("currency", "USD"),
+                        "effective_status": row.get("campaign_effective_status", "UNKNOWN"),
+                        "fb_ad_account_id": row.get("ad_account_id", ""),
+                        "account_name": row.get("account_name", ""),
+                        "spend": 0.0,
+                        "leads": 0,
+                        "link_clicks": 0,
+                        "impressions": 0,
+                    }
+                agg = campaigns_map[cid]
+
+            agg["spend"] += spend
+            agg["leads"] += leads
+            agg["link_clicks"] += link_clicks
+            agg["impressions"] += impressions
+
+        # Build FbtoolCampaign objects (CBO)
         campaigns = []
         for agg in campaigns_map.values():
             clicks = agg["link_clicks"]
@@ -333,8 +389,36 @@ class FbtoolClient:
                 fbtool_account_id=account_id,
             ))
 
-        logger.info(f"fbtool: parsed {len(campaigns)} campaigns for account {account_id}")
-        return campaigns
+        # Build FbtoolAdset objects (ABO)
+        adsets = []
+        for agg in adsets_map.values():
+            clicks = agg["link_clicks"]
+            spend = agg["spend"]
+            leads = agg["leads"]
+            adsets.append(FbtoolAdset(
+                fb_adset_id=agg["fb_adset_id"],
+                fb_campaign_id=agg["fb_campaign_id"],
+                name=agg["name"],
+                campaign_name=agg["campaign_name"],
+                daily_budget=agg["daily_budget"],
+                currency=agg["currency"],
+                effective_status=agg["effective_status"],
+                spend=spend,
+                leads=leads,
+                link_clicks=clicks,
+                impressions=agg["impressions"],
+                cpc=round(spend / clicks, 2) if clicks > 0 else 0.0,
+                cpl=round(spend / leads, 2) if leads > 0 else 0.0,
+                fb_ad_account_id=agg["fb_ad_account_id"],
+                account_name=agg["account_name"],
+                fbtool_account_id=account_id,
+            ))
+
+        logger.info(
+            f"fbtool: parsed {len(campaigns)} CBO campaigns + "
+            f"{len(adsets)} ABO adsets for account {account_id}"
+        )
+        return campaigns, adsets
 
     @staticmethod
     def _parse_accounts(html: str) -> list[FbtoolAccount]:

@@ -210,6 +210,26 @@ class DatabaseService:
         )
         return response.data[0] if response.data else None
 
+    def get_campaign_by_adset_id(
+        self, fb_account_id: str, fb_adset_id: str,
+    ) -> Optional[dict]:
+        response = (
+            self.client.table("campaigns")
+            .select("*")
+            .eq("fb_account_id", fb_account_id)
+            .eq("fb_adset_id", fb_adset_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def upsert_adset(self, data: dict[str, Any]) -> dict:
+        response = (
+            self.client.table("campaigns")
+            .upsert(data, on_conflict="fb_account_id,fb_adset_id")
+            .execute()
+        )
+        return response.data[0]
+
     def get_campaign(self, campaign_id: UUID) -> Optional[dict]:
         query = (
             self.client.table("campaigns")

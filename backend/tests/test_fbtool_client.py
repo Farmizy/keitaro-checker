@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.services.fbtool_client import FbtoolClient, FbtoolCampaign, FbtoolAccount, FbtoolAuthError
+from app.services.fbtool_client import FbtoolClient, FbtoolCampaign, FbtoolAdset, FbtoolAccount, FbtoolAuthError
 
 
 @pytest.fixture
@@ -103,9 +103,10 @@ ACCOUNTS_HTML = """
 class TestParseStatisticsJson:
     def test_parses_campaigns_aggregated(self):
         """Two ads from same campaign should be aggregated."""
-        campaigns = FbtoolClient._parse_statistics_json(STATISTICS_JSON, 18856714)
+        campaigns, adsets = FbtoolClient._parse_statistics_json(STATISTICS_JSON, 18856714)
 
         assert len(campaigns) == 2
+        assert len(adsets) == 0  # All CBO, no adsets
 
         c1 = campaigns[0]
         assert c1.fb_campaign_id == "6963228102168"
@@ -131,13 +132,136 @@ class TestParseStatisticsJson:
         assert c2.spend == 0
 
     def test_empty_data_returns_empty(self):
-        assert FbtoolClient._parse_statistics_json([], 1) == []
+        assert FbtoolClient._parse_statistics_json([], 1) == ([], [])
 
     def test_none_data_returns_empty(self):
-        assert FbtoolClient._parse_statistics_json(None, 1) == []
+        assert FbtoolClient._parse_statistics_json(None, 1) == ([], [])
 
     def test_empty_rows_returns_empty(self):
-        assert FbtoolClient._parse_statistics_json([{"info": {}, "rows": []}], 1) == []
+        assert FbtoolClient._parse_statistics_json([{"info": {}, "rows": []}], 1) == ([], [])
+
+    def test_abo_adsets_parsed_separately(self):
+        """ABO campaigns (campaign_daily_budget=0, adset_daily_budget>0) → FbtoolAdset."""
+        abo_json = [
+            {
+                "info": {},
+                "rows": [
+                    {
+                        "id": "ad_001",
+                        "campaign_id": "camp_abo_1",
+                        "campaign_name": "ABO Campaign",
+                        "campaign_effective_status": "ACTIVE",
+                        "campaign_daily_budget": "0",
+                        "adset_id": "adset_001",
+                        "adset_name": "Adset One",
+                        "adset_daily_budget": "1000",
+                        "adset_effective_status": "ACTIVE",
+                        "currency": "USD",
+                        "spend": 5.0,
+                        "leads": 1,
+                        "link_click": 20,
+                        "impressions": 300,
+                        "ad_account_id": "act_123",
+                        "account_name": "Test",
+                        "main_param": "camp_abo_1",
+                    },
+                    {
+                        "id": "ad_002",
+                        "campaign_id": "camp_abo_1",
+                        "campaign_name": "ABO Campaign",
+                        "campaign_effective_status": "ACTIVE",
+                        "campaign_daily_budget": "0",
+                        "adset_id": "adset_002",
+                        "adset_name": "Adset Two",
+                        "adset_daily_budget": "2000",
+                        "adset_effective_status": "ACTIVE",
+                        "currency": "USD",
+                        "spend": 10.0,
+                        "leads": 2,
+                        "link_click": 40,
+                        "impressions": 500,
+                        "ad_account_id": "act_123",
+                        "account_name": "Test",
+                        "main_param": "camp_abo_1",
+                    },
+                ],
+            }
+        ]
+        campaigns, adsets = FbtoolClient._parse_statistics_json(abo_json, 99)
+
+        assert len(campaigns) == 0  # No CBO campaigns
+        assert len(adsets) == 2
+
+        a1 = adsets[0]
+        assert a1.fb_adset_id == "adset_001"
+        assert a1.fb_campaign_id == "camp_abo_1"
+        assert a1.name == "Adset One"
+        assert a1.campaign_name == "ABO Campaign"
+        assert a1.daily_budget == 10.0  # 1000 cents
+        assert a1.spend == 5.0
+        assert a1.leads == 1
+        assert a1.fbtool_account_id == 99
+
+        a2 = adsets[1]
+        assert a2.fb_adset_id == "adset_002"
+        assert a2.daily_budget == 20.0  # 2000 cents
+        assert a2.spend == 10.0
+        assert a2.leads == 2
+
+    def test_mixed_cbo_abo(self):
+        """Mix of CBO and ABO in same response."""
+        mixed_json = [
+            {
+                "info": {},
+                "rows": [
+                    {
+                        "id": "ad_cbo",
+                        "campaign_id": "camp_cbo",
+                        "campaign_name": "CBO Camp",
+                        "campaign_effective_status": "ACTIVE",
+                        "campaign_daily_budget": "3000",
+                        "adset_id": "adset_x",
+                        "adset_daily_budget": "0",
+                        "adset_effective_status": "ACTIVE",
+                        "currency": "USD",
+                        "spend": 5.0,
+                        "leads": 1,
+                        "link_click": 10,
+                        "impressions": 100,
+                        "ad_account_id": "act_1",
+                        "account_name": "Acc",
+                        "main_param": "camp_cbo",
+                    },
+                    {
+                        "id": "ad_abo",
+                        "campaign_id": "camp_abo",
+                        "campaign_name": "ABO Camp",
+                        "campaign_effective_status": "ACTIVE",
+                        "campaign_daily_budget": "0",
+                        "adset_id": "adset_y",
+                        "adset_daily_budget": "1500",
+                        "adset_effective_status": "ACTIVE",
+                        "currency": "USD",
+                        "spend": 8.0,
+                        "leads": 0,
+                        "link_click": 30,
+                        "impressions": 200,
+                        "ad_account_id": "act_1",
+                        "account_name": "Acc",
+                        "main_param": "camp_abo",
+                    },
+                ],
+            }
+        ]
+        campaigns, adsets = FbtoolClient._parse_statistics_json(mixed_json, 1)
+
+        assert len(campaigns) == 1
+        assert campaigns[0].fb_campaign_id == "camp_cbo"
+        assert campaigns[0].daily_budget == 30.0
+
+        assert len(adsets) == 1
+        assert adsets[0].fb_adset_id == "adset_y"
+        assert adsets[0].daily_budget == 15.0
 
 
 class TestParseAccounts:

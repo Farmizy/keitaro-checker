@@ -163,7 +163,7 @@ class AutoLauncher:
             for account_id in fbtool_account_ids:
                 try:
                     # Fetch with 7-day range so CPC reflects real data, not just today
-                    campaigns = await fbtool.get_campaigns(
+                    campaigns, _adsets = await fbtool.get_campaigns(
                         account_id, today_str, date_from=wide_start,
                     )
                     all_fbtool_campaigns.extend(campaigns)
@@ -408,7 +408,7 @@ class AutoLauncher:
             all_fbtool_campaigns: list[FbtoolCampaign] = []
             for account_id in fbtool_account_ids:
                 try:
-                    campaigns = await fbtool.get_campaigns(account_id, today)
+                    campaigns, _adsets = await fbtool.get_campaigns(account_id, today)
                     all_fbtool_campaigns.extend(campaigns)
                 except Exception as e:
                     logger.error(f"Failed to fetch campaigns for fbtool account {account_id}: {e}")

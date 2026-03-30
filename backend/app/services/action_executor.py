@@ -23,19 +23,27 @@ class ActionExecutor:
         fb_campaign_id: str,
         fbtool_account_id: int,
         fb_account_id: str,
+        fb_adset_id: str | None = None,
     ) -> bool:
-        """Execute an action and log it. Returns True if action was taken."""
+        """Execute an action and log it. Returns True if action was taken.
+
+        For ABO adsets, fb_adset_id is passed and used as the fbtool object ID.
+        For CBO campaigns, fb_campaign_id is used.
+        """
         if action.type == ActionType.WAIT:
             return False
 
+        # fbtool operates on this ID (campaign for CBO, adset for ABO)
+        fb_object_id = fb_adset_id or fb_campaign_id
+
         if action.type == ActionType.SET_BUDGET:
             return await self._set_budget(
-                action, campaign_db_id, fb_campaign_id, fbtool_account_id, fb_account_id,
+                action, campaign_db_id, fb_object_id, fbtool_account_id, fb_account_id,
             )
 
         if action.type == ActionType.STOP:
-            return await self._stop_campaign(
-                action, campaign_db_id, fb_campaign_id, fbtool_account_id, fb_account_id,
+            return await self._stop(
+                action, campaign_db_id, fb_object_id, fbtool_account_id, fb_account_id,
             )
 
         if action.type == ActionType.MANUAL_REVIEW:
@@ -45,13 +53,13 @@ class ActionExecutor:
 
     async def _set_budget(
         self, action: Action, campaign_db_id: str,
-        fb_campaign_id: str, fbtool_account_id: int, fb_account_id: str,
+        fb_object_id: str, fbtool_account_id: int, fb_account_id: str,
     ) -> bool:
         success = False
         error_msg = None
         try:
             success = await self.fbtool.set_budget(
-                fbtool_account_id, fb_campaign_id, action.target_budget,
+                fbtool_account_id, fb_object_id, action.target_budget,
             )
             if success:
                 self.db.update_campaign(campaign_db_id, {
@@ -60,19 +68,19 @@ class ActionExecutor:
                 })
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Failed to set budget for campaign {fb_campaign_id}: {e}")
+            logger.error(f"Failed to set budget for {fb_object_id}: {e}")
 
         self._log(campaign_db_id, fb_account_id, "budget_increase", action, success, error_msg)
         return success
 
-    async def _stop_campaign(
+    async def _stop(
         self, action: Action, campaign_db_id: str,
-        fb_campaign_id: str, fbtool_account_id: int, fb_account_id: str,
+        fb_object_id: str, fbtool_account_id: int, fb_account_id: str,
     ) -> bool:
         success = False
         error_msg = None
         try:
-            success = await self.fbtool.stop_campaign(fbtool_account_id, fb_campaign_id)
+            success = await self.fbtool.stop_campaign(fbtool_account_id, fb_object_id)
             if success:
                 self.db.update_campaign(campaign_db_id, {
                     "status": "stopped",
@@ -80,7 +88,7 @@ class ActionExecutor:
                 })
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Failed to stop campaign {fb_campaign_id}: {e}")
+            logger.error(f"Failed to stop {fb_object_id}: {e}")
 
         self._log(campaign_db_id, fb_account_id, "campaign_stop", action, success, error_msg)
         return success
