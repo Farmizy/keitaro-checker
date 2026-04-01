@@ -1,8 +1,11 @@
+from datetime import date
+
 import pytest
 from app.services.auto_launcher import (
     AutoLauncher,
     CPC_THRESHOLD_LAUNCH_1,
     CPC_THRESHOLD_LAUNCH_2,
+    parse_campaign_date,
 )
 
 
@@ -159,3 +162,25 @@ class TestClassifyCampaign:
             last_2_launches_failed=False, settings=DEFAULT_SETTINGS,
         )
         assert result == "new"
+
+
+class TestParseCampaignDate:
+    """Test date extraction from campaign name prefix."""
+
+    def test_standard_format(self):
+        assert parse_campaign_date("30.03 v1 Диабет/ES/...", 2026) == date(2026, 3, 30)
+
+    def test_single_digit_day(self):
+        assert parse_campaign_date("3.03 v2 Суставы/PL/...", 2026) == date(2026, 3, 3)
+
+    def test_slash_separator(self):
+        assert parse_campaign_date("30/03 v1 Диабет", 2026) == date(2026, 3, 30)
+
+    def test_no_date_prefix(self):
+        assert parse_campaign_date("Promoting https://example.com", 2026) is None
+
+    def test_invalid_date(self):
+        assert parse_campaign_date("32.13 v1 Bad date", 2026) is None
+
+    def test_with_leading_spaces(self):
+        assert parse_campaign_date("  30.03 v1 Test", 2026) == date(2026, 3, 30)

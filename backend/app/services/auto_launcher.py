@@ -5,8 +5,9 @@ Multi-tenant: iterates over all users with configured credentials.
 """
 
 import asyncio
+import re
 import zoneinfo
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from loguru import logger
 
 from app.services.fbtool_client import FbtoolClient, FbtoolCampaign, FbtoolAuthError
@@ -21,6 +22,22 @@ CPC_THRESHOLD_LAUNCH_1 = 0.50  # After 1st launch: relaunch if CPC ≤ $0.50
 CPC_THRESHOLD_LAUNCH_2 = 0.25  # After 2nd launch: relaunch if CPC ≤ $0.25
 LAUNCH_WINDOW_DAYS = 5  # Count launches in this window
 ROI_WINDOW_DAYS = 7  # Check ROI over this period
+NEW_CAMPAIGN_MAX_AGE_DAYS = 5  # Launch new campaigns created within this many days
+
+# Pattern: "30.03" or "30.03 v1" at the start of campaign name
+_DATE_RE = re.compile(r"^(\d{1,2})[./](\d{2})")
+
+
+def parse_campaign_date(name: str, ref_year: int) -> date | None:
+    """Extract date from campaign name prefix like '30.03 v1 ...'."""
+    m = _DATE_RE.match(name.strip())
+    if not m:
+        return None
+    day, month = int(m.group(1)), int(m.group(2))
+    try:
+        return date(ref_year, month, day)
+    except ValueError:
+        return None
 
 
 class AutoLauncher:
@@ -264,11 +281,25 @@ class AutoLauncher:
                 # Get 7-day Keitaro data
                 k7d = stats_7d.get(fc.fb_campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
 
-                # Must have Keitaro data in 7-day window (except never-launched campaigns)
-                if fc.fb_campaign_id not in stats_7d and launch_count_5d > 0:
-                    skipped_reasons["no_keitaro_data"] += 1
-                    logger.debug(f"  skip no_keitaro: {fc.name} (fb_id={fc.fb_campaign_id})")
-                    continue
+                # Must have Keitaro data — except fresh never-launched campaigns
+                if fc.fb_campaign_id not in stats_7d:
+                    if launch_count_5d > 0:
+                        skipped_reasons["no_keitaro_data"] += 1
+                        logger.debug(f"  skip no_keitaro: {fc.name} (fb_id={fc.fb_campaign_id})")
+                        continue
+                    # Never launched — check date in name (within last N days)
+                    camp_date = parse_campaign_date(fc.name, effective_today.year)
+                    if not camp_date or (effective_today - camp_date).days >= NEW_CAMPAIGN_MAX_AGE_DAYS:
+                        skipped_reasons["no_keitaro_data"] += 1
+                        logger.debug(
+                            f"  skip no_keitaro (old/no date): {fc.name} "
+                            f"(fb_id={fc.fb_campaign_id}, camp_date={camp_date})"
+                        )
+                        continue
+                    logger.debug(
+                        f"  fresh campaign, no keitaro: {fc.name} "
+                        f"(camp_date={camp_date}, age={(effective_today - camp_date).days}d)"
+                    )
 
                 # Check if last 2 launches both failed (loss + 0 leads)
                 last_2_launches_failed = False
