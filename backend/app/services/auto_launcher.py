@@ -264,8 +264,8 @@ class AutoLauncher:
                 # Get 7-day Keitaro data
                 k7d = stats_7d.get(fc.fb_campaign_id, {"conversions": 0, "roi": 0, "cost": 0})
 
-                # Must have Keitaro data in 7-day window
-                if fc.fb_campaign_id not in stats_7d:
+                # Must have Keitaro data in 7-day window (except never-launched campaigns)
+                if fc.fb_campaign_id not in stats_7d and launch_count_5d > 0:
                     skipped_reasons["no_keitaro_data"] += 1
                     logger.debug(f"  skip no_keitaro: {fc.name} (fb_id={fc.fb_campaign_id})")
                     continue
